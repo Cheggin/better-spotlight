@@ -10,6 +10,73 @@ struct CalendarAPI {
                         to:   Date().addingTimeInterval(90 * 86400))
     }
 
+    /// Creates a new event on the user's primary calendar. Supports timed and
+    /// all-day events, attendees, location, description, and an optional
+    /// Google Meet attachment via conferenceDataVersion=1.
+    @discardableResult
+    func createEvent(
+        title: String,
+        start: Date,
+        end: Date,
+        isAllDay: Bool,
+        location: String? = nil,
+        description: String? = nil,
+        attendees: [String] = [],
+        addMeet: Bool = false
+    ) async throws -> CalendarEvent? {
+        let token = try await session.validAccessToken()
+        var comps = URLComponents(string:
+            "https://www.googleapis.com/calendar/v3/calendars/primary/events")!
+        if addMeet {
+            comps.queryItems = [.init(name: "conferenceDataVersion", value: "1")]
+        }
+
+        var body: [String: Any] = ["summary": title]
+        if let location, !location.isEmpty   { body["location"] = location }
+        if let description, !description.isEmpty { body["description"] = description }
+        if !attendees.isEmpty {
+            body["attendees"] = attendees.map { ["email": $0] }
+        }
+        if isAllDay {
+            let f = DateFormatter()
+            f.dateFormat = "yyyy-MM-dd"
+            f.timeZone = .current
+            body["start"] = ["date": f.string(from: start)]
+            body["end"]   = ["date": f.string(from: end.addingTimeInterval(86400))]
+        } else {
+            let f = ISO8601DateFormatter.gcalBasic
+            body["start"] = ["dateTime": f.string(from: start),
+                             "timeZone": TimeZone.current.identifier]
+            body["end"]   = ["dateTime": f.string(from: end),
+                             "timeZone": TimeZone.current.identifier]
+        }
+        if addMeet {
+            body["conferenceData"] = [
+                "createRequest": [
+                    "requestId": UUID().uuidString,
+                    "conferenceSolutionKey": ["type": "hangoutsMeet"]
+                ]
+            ]
+        }
+
+        var req = URLRequest(url: comps.url!)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        Log.info("calendar create '\(title)' allDay=\(isAllDay) meet=\(addMeet)",
+                 category: "calendar")
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            let bodyText = String(data: data, encoding: .utf8) ?? ""
+            throw GoogleAPIError.bad(status: (resp as? HTTPURLResponse)?.statusCode ?? -1,
+                                     body: bodyText)
+        }
+        let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+        return Self.parseEvent(json)
+    }
+
     /// Patches the event to add a Google Meet conference, then returns the URL.
     /// Uses `conferenceDataVersion=1` and a `createRequest` per the Calendar API docs:
     /// https://developers.google.com/calendar/api/guides/create-events#conferencing

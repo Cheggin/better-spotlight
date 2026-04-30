@@ -8,6 +8,7 @@ struct CalendarPane: View {
     var eventsOnDate: [CalendarEvent]
     var allEvents: [CalendarEvent] = []
     var onSelectEvent: (CalendarEvent) -> Void = { _ in }
+    var onCreateEvent: (Date) -> Void = { _ in }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -21,7 +22,17 @@ struct CalendarPane: View {
                 .padding(.horizontal, Tokens.Space.md)
                 .padding(.bottom, Tokens.Space.xs)
 
-            DayTimeline(events: eventsOnDate, onSelect: onSelectEvent)
+            DayTimeline(events: eventsOnDate,
+                        onSelect: onSelectEvent,
+                        onCreateAt: { hour in
+                            // Combine selected date + clicked hour into a Date.
+                            let cal = Calendar.current
+                            var comps = cal.dateComponents([.year, .month, .day],
+                                                           from: selectedDate)
+                            comps.hour = Int(hour)
+                            comps.minute = Int((hour - hour.rounded(.down)) * 60)
+                            if let d = cal.date(from: comps) { onCreateEvent(d) }
+                        })
                 .padding(.horizontal, Tokens.Space.md)
                 .padding(.bottom, Tokens.Space.md)
         }
@@ -65,6 +76,7 @@ private struct DayHeader: View {
 private struct DayTimeline: View {
     let events: [CalendarEvent]
     let onSelect: (CalendarEvent) -> Void
+    let onCreateAt: (Double) -> Void
 
     private let hourHeight: CGFloat = 44
     private let firstHour: Int = 8       // 8 AM
@@ -74,33 +86,30 @@ private struct DayTimeline: View {
     var body: some View {
         ScrollView {
             ZStack(alignment: .topLeading) {
-                // Hour rows
+                // Hour rows — each is a clickable empty slot.
                 VStack(spacing: 0) {
                     ForEach(firstHour..<lastHour, id: \.self) { hour in
-                        HStack(alignment: .top, spacing: Tokens.Space.xs) {
-                            Text(hourLabel(hour))
-                                .font(.system(size: 11, weight: .medium))
-                                .monospacedDigit()
-                                .foregroundStyle(Tokens.Color.textTertiary)
-                                .frame(width: leadingLabelWidth, alignment: .trailing)
-                                .offset(y: -6)
-                            Rectangle()
-                                .fill(Tokens.Color.hairline)
-                                .frame(height: 0.5)
-                                .frame(maxWidth: .infinity)
-                                .offset(y: 0)
-                        }
-                        .frame(height: hourHeight, alignment: .topLeading)
+                        HourSlot(
+                            label: hourLabel(hour),
+                            leadingLabelWidth: leadingLabelWidth,
+                            height: hourHeight,
+                            onTapHalf: { half in
+                                // half = 0.0 (top of hour) or 0.5 (bottom of hour)
+                                onCreateAt(Double(hour) + half)
+                            }
+                        )
                     }
                 }
 
-                // Event blocks layered on top of the hour grid.
-                ForEach(events, id: \.id) { event in
-                    EventBlock(event: event,
+                // Event blocks with column-based overlap layout.
+                ForEach(layoutEvents(), id: \.event.id) { laid in
+                    EventBlock(event: laid.event,
                                firstHour: firstHour,
                                hourHeight: hourHeight,
                                leadingInset: leadingLabelWidth + Tokens.Space.xs,
-                               onTap: { onSelect(event) })
+                               column: laid.column,
+                               columnCount: laid.columnCount,
+                               onTap: { onSelect(laid.event) })
                 }
             }
             .padding(.top, 4)
@@ -113,6 +122,123 @@ private struct DayTimeline: View {
         let suffix = hour < 12 ? "AM" : "PM"
         return "\(h12) \(suffix)"
     }
+
+    // MARK: - Overlap layout
+
+    /// Assigns each event a column index and a column count for its overlap
+    /// group, so concurrent events render side-by-side instead of stacked.
+    /// Algorithm: sort by start, walk through, place each event in the lowest
+    /// column index that's free; on group end (no overlap with last group end)
+    /// reset and apply the group's max-column-count to all members.
+    private func layoutEvents() -> [LaidOutEvent] {
+        struct Active { var endIndex: Int; var event: CalendarEvent; var column: Int }
+        let sorted = events.sorted { $0.start < $1.start }
+        var laid: [LaidOutEvent] = []
+        var groupStart = 0
+        var groupEnd = Date.distantPast
+        var columnsInGroup: [Date] = [] // per-column "currently busy until" end time
+
+        func finalizeGroup() {
+            let total = max(1, columnsInGroup.count)
+            for i in groupStart..<laid.count {
+                laid[i].columnCount = total
+            }
+        }
+
+        for event in sorted {
+            if event.start >= groupEnd && !laid.isEmpty {
+                finalizeGroup()
+                groupStart = laid.count
+                columnsInGroup.removeAll()
+                groupEnd = .distantPast
+            }
+            // Find first column whose end <= event.start.
+            var col = -1
+            for (i, busyUntil) in columnsInGroup.enumerated() where busyUntil <= event.start {
+                col = i
+                columnsInGroup[i] = event.end
+                break
+            }
+            if col == -1 {
+                columnsInGroup.append(event.end)
+                col = columnsInGroup.count - 1
+            }
+            groupEnd = max(groupEnd, event.end)
+            laid.append(LaidOutEvent(event: event, column: col, columnCount: 1))
+        }
+        finalizeGroup()
+        return laid
+    }
+}
+
+private struct LaidOutEvent {
+    let event: CalendarEvent
+    let column: Int
+    var columnCount: Int
+}
+
+/// Splits horizontal space among overlapping events.
+private struct OverlapColumn: ViewModifier {
+    let column: Int
+    let columnCount: Int
+    let leadingInset: CGFloat
+
+    func body(content: Content) -> some View {
+        GeometryReader { geo in
+            let usable = max(geo.size.width - leadingInset - 4, 1)
+            let colWidth = usable / CGFloat(max(columnCount, 1))
+            content
+                .frame(width: colWidth, alignment: .leading)
+                .offset(x: CGFloat(column) * colWidth)
+        }
+    }
+}
+
+private struct HourSlot: View {
+    let label: String
+    let leadingLabelWidth: CGFloat
+    let height: CGFloat
+    let onTapHalf: (Double) -> Void
+
+    @State private var hoveringHalf: Double? = nil
+
+    var body: some View {
+        HStack(alignment: .top, spacing: Tokens.Space.xs) {
+            Text(label)
+                .font(.system(size: 11, weight: .medium))
+                .monospacedDigit()
+                .foregroundStyle(Tokens.Color.textTertiary)
+                .frame(width: leadingLabelWidth, alignment: .trailing)
+                .offset(y: -6)
+
+            // Hot zones for top-of-hour and bottom-of-hour clicks
+            VStack(spacing: 0) {
+                ZStack {
+                    Rectangle().fill(Tokens.Color.hairline).frame(height: 0.5)
+                        .frame(maxWidth: .infinity, alignment: .top)
+                    Rectangle()
+                        .fill(hoveringHalf == 0.0 ? Tokens.Color.accentSoft : .clear)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                        .onHover { hoveringHalf = $0 ? 0.0 : nil }
+                        .onTapGesture { onTapHalf(0.0) }
+                }
+                .frame(height: height / 2)
+
+                ZStack {
+                    Rectangle()
+                        .fill(hoveringHalf == 0.5 ? Tokens.Color.accentSoft : .clear)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                        .onHover { hoveringHalf = $0 ? 0.5 : nil }
+                        .onTapGesture { onTapHalf(0.5) }
+                }
+                .frame(height: height / 2)
+            }
+            .animation(.easeOut(duration: 0.10), value: hoveringHalf)
+        }
+        .frame(height: height, alignment: .topLeading)
+    }
 }
 
 private struct EventBlock: View {
@@ -120,6 +246,8 @@ private struct EventBlock: View {
     let firstHour: Int
     let hourHeight: CGFloat
     let leadingInset: CGFloat
+    var column: Int = 0
+    var columnCount: Int = 1
     let onTap: () -> Void
 
     @State private var hovering = false
@@ -158,6 +286,11 @@ private struct EventBlock: View {
         .padding(.leading, leadingInset)
         .padding(.trailing, 4)
         .offset(y: offsetY)
+        // Width split for overlapping events.
+        .frame(maxWidth: .infinity)
+        .modifier(OverlapColumn(column: column,
+                                columnCount: columnCount,
+                                leadingInset: leadingInset))
     }
 
     private var compactStartTime: String {

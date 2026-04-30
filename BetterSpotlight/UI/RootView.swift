@@ -9,6 +9,7 @@ struct RootView: View {
     @State private var category: SearchCategory = .all
     @State private var selectedID: SearchResult.ID?
     @State private var selectedDate: Date = Calendar.current.startOfDay(for: Date())
+    @State private var composerStart: Date?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -17,9 +18,13 @@ struct RootView: View {
                 .padding(.top, Tokens.Space.sm)
                 .padding(.bottom, Tokens.Space.xs)
 
-            CategoryTabs(selection: $category, counts: coordinator.counts)
-                .padding(.horizontal, Tokens.Space.md)
-                .padding(.bottom, Tokens.Space.xs)
+            CategoryTabs(
+                selection: $category,
+                counts: coordinator.counts,
+                timeRange: $coordinator.timeRange
+            )
+            .padding(.horizontal, Tokens.Space.md)
+            .padding(.bottom, Tokens.Space.xs)
 
             Divider().opacity(0.45)
 
@@ -36,10 +41,30 @@ struct RootView: View {
         .liquidGlass(radius: Tokens.Radius.panel)
         .panelShadows()
         .padding(Tokens.Space.xs)
+        .overlay(alignment: .center) {
+            if let start = composerStart {
+                Color.black.opacity(0.20)
+                    .ignoresSafeArea()
+                    .onTapGesture { composerStart = nil }
+                EventComposer(
+                    initialStart: start,
+                    initialEnd: start.addingTimeInterval(3600),
+                    onClose: { composerStart = nil },
+                    onCreated: {
+                        coordinator.refresh()
+                    }
+                )
+                .environmentObject(googleSession)
+                .transition(.scale.combined(with: .opacity))
+            }
+        }
+        .animation(.easeOut(duration: 0.18), value: composerStart)
         .onAppear {
             coordinator.attach(googleSession: googleSession, preferences: preferences)
             coordinator.update(query: "")
+            coordinator.startPolling()
         }
+        .onDisappear { coordinator.stopPolling() }
         .onChange(of: query) { _, new in coordinator.update(query: new) }
         .onChange(of: coordinator.results.first?.id) { _, _ in
             if selectedID == nil { selectedID = coordinator.results.first?.id }
@@ -60,8 +85,10 @@ struct RootView: View {
                 selectedID: $selectedID,
                 onActivate: openSelected,
                 query: query,
-                googleSignedIn: googleSession.isSignedIn
+                googleSignedIn: googleSession.isSignedIn,
+                category: category
             )
+            .environmentObject(preferences)
             .frame(width: 340)
 
             Divider().opacity(0.45)
@@ -72,6 +99,9 @@ struct RootView: View {
                 allEvents: allEvents,
                 onSelectEvent: { event in
                     selectedID = "event:\(event.id)"
+                },
+                onCreateEvent: { start in
+                    composerStart = start
                 }
             )
             .frame(maxWidth: .infinity)
