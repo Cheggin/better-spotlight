@@ -14,7 +14,7 @@ enum MessagesSender {
             switch self {
             case .scriptFailed(let msg): return "Failed to send: \(msg)"
             case .automationDenied:
-                return "Not allowed to control Messages. Enable Better Spotlight under System Settings → Privacy & Security → Automation → Messages."
+                return "macOS has a cached denial for Better Spotlight → Messages. Run this in Terminal once, then try again:\n\ntccutil reset AppleEvents com.reagan.betterspotlight"
             }
         }
     }
@@ -180,8 +180,15 @@ enum MessagesSender {
         }
 
         if result.hasPrefix("err:") {
-            throw SendError.scriptFailed(String(result.dropFirst(4))
-                .trimmingCharacters(in: .whitespaces))
+            let msg = String(result.dropFirst(4)).trimmingCharacters(in: .whitespaces)
+            let lowered = msg.lowercased()
+            if lowered.contains("not authorized") ||
+               lowered.contains("not allowed to send apple events") {
+                Log.info("messages: AppleScript inner error mapped to automationDenied: \(msg)",
+                         category: "messages")
+                throw SendError.automationDenied
+            }
+            throw SendError.scriptFailed(msg)
         }
         Log.info("messages: sent to \(handle)", category: "messages")
     }

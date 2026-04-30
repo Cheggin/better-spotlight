@@ -21,14 +21,37 @@ struct MessagesThreadView: View {
                 Divider().opacity(0.45)
                 threadView(for: m)
                 Divider().opacity(0.45)
-                MessagesReplyBox(message: m)
-                    .padding(.horizontal, Tokens.Space.md)
-                    .padding(.vertical, Tokens.Space.sm)
+                MessagesReplyBox(message: m) {
+                    Task { await refreshAfterSend() }
+                }
+                .padding(.horizontal, Tokens.Space.md)
+                .padding(.vertical, Tokens.Space.sm)
             } else {
                 placeholder
             }
         }
         .task(id: message?.handle) { await loadThread() }
+        .task(id: message?.handle) { await pollWhileVisible() }
+    }
+
+    /// Re-reads chat.db a few times after a send. The Messages agent commits
+    /// the outgoing row asynchronously, so an immediate reload often misses
+    /// it; we re-check at 0/500ms/1500ms/3000ms.
+    private func refreshAfterSend() async {
+        for delay in [UInt64(0), 500_000_000, 1_500_000_000, 3_000_000_000] {
+            if delay > 0 { try? await Task.sleep(nanoseconds: delay) }
+            await loadThread()
+        }
+    }
+
+    /// Light background poll so incoming messages / tapbacks appear while the
+    /// thread is open without forcing the user to reopen the panel.
+    private func pollWhileVisible() async {
+        while !Task.isCancelled, message != nil {
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            if Task.isCancelled { break }
+            await loadThread()
+        }
     }
 
     // MARK: Header
@@ -152,6 +175,7 @@ struct MessagesThreadView: View {
 
 struct MessagesReplyBox: View {
     let message: ChatMessage
+    var onSent: () -> Void = {}
 
     @State private var replyText = ""
     @State private var sending = false
@@ -203,17 +227,27 @@ struct MessagesReplyBox: View {
                         .foregroundStyle(.green)
                 }
                 if let err = sendError {
-                    Text(err)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.red)
-                        .lineLimit(2)
-                    if err.contains("Automation") || err.contains("Privacy") {
-                        Button("Open Settings") {
-                            MessagesSender.openAutomationSettings()
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(err)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.red)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if err.contains("tccutil") {
+                            HStack(spacing: 8) {
+                                Button("Copy fix command") {
+                                    let pb = NSPasteboard.general
+                                    pb.clearContents()
+                                    pb.setString("tccutil reset AppleEvents com.reagan.betterspotlight",
+                                                 forType: .string)
+                                }
+                                Button("Open Settings") {
+                                    MessagesSender.openAutomationSettings()
+                                }
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(Tokens.Color.accent)
                         }
-                        .buttonStyle(.borderless)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Tokens.Color.accent)
                     }
                 }
                 Spacer()
@@ -249,6 +283,7 @@ struct MessagesReplyBox: View {
                     replyText = ""
                     sentFlash = true
                     sending = false
+                    onSent()
                     Task {
                         try? await Task.sleep(nanoseconds: 1_500_000_000)
                         sentFlash = false

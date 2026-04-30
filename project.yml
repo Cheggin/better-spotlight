@@ -56,6 +56,7 @@ targets:
         com.apple.security.network.server: true
         com.apple.security.files.user-selected.read-only: true
         com.apple.security.personal-information.addressbook: true
+        com.apple.security.automation.apple-events: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.reagan.betterspotlight
