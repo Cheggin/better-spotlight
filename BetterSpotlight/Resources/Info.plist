@@ -36,7 +36,7 @@
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>Better Spotlight uses Apple Events to open files you select.</string>
+	<string>Better Spotlight uses Apple Events to send replies through Messages.app.</string>
 	<key>NSCalendarsUsageDescription</key>
 	<string>Better Spotlight reads your Google Calendar via the Google API; this entitlement is reserved for future native Calendar integration.</string>
 	<key>NSContactsUsageDescription</key>

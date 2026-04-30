@@ -90,6 +90,10 @@ struct ContactInfo: Hashable, Identifiable {
     let emails: [String]
     let imageData: Data?
     let organization: String?
+    var birthday: DateComponents? = nil
+    var jobTitle: String? = nil
+    var addresses: [String] = []
+    var note: String? = nil
 
     var initials: String {
         let parts = displayName.split(separator: " ").prefix(2)

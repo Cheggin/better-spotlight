@@ -6,7 +6,30 @@ final class ContactsProvider: SearchProvider {
     let category: SearchCategory = .contacts
 
     private let store = CNContactStore()
-    private static var cached: [ContactInfo] = []
+    nonisolated(unsafe) static var cached: [ContactInfo] = []
+
+    /// Resolve a Messages handle (phone/email) to a full `ContactInfo`.
+    /// Mirrors `MessagesProvider.name(forHandle:)` normalization.
+    nonisolated static func contact(forHandle handle: String) -> ContactInfo? {
+        let lowerEmail = handle.contains("@") ? handle.lowercased() : nil
+        let phoneKey: String? = handle.contains("@") ? nil : {
+            let digits = handle.filter { $0.isNumber }
+            return digits.count > 10 ? String(digits.suffix(10)) : digits
+        }()
+        for c in cached {
+            if let lowerEmail, c.emails.contains(where: { $0.lowercased() == lowerEmail }) {
+                return c
+            }
+            if let phoneKey {
+                for p in c.phoneNumbers {
+                    let d = p.filter { $0.isNumber }
+                    let key = d.count > 10 ? String(d.suffix(10)) : d
+                    if key == phoneKey { return c }
+                }
+            }
+        }
+        return nil
+    }
 
     func search(query rawQuery: String) async throws -> [SearchResult] {
         await prefetch()
@@ -47,9 +70,11 @@ final class ContactsProvider: SearchProvider {
 
         let keys: [CNKeyDescriptor] = [
             CNContactGivenNameKey, CNContactFamilyNameKey,
-            CNContactOrganizationNameKey,
+            CNContactOrganizationNameKey, CNContactJobTitleKey,
             CNContactPhoneNumbersKey, CNContactEmailAddressesKey,
             CNContactThumbnailImageDataKey, CNContactIdentifierKey,
+            CNContactBirthdayKey, CNContactPostalAddressesKey,
+            CNContactNoteKey,
         ].map { $0 as CNKeyDescriptor }
         let req = CNContactFetchRequest(keysToFetch: keys)
         var out: [ContactInfo] = []
@@ -59,6 +84,10 @@ final class ContactsProvider: SearchProvider {
                     .filter { !$0.isEmpty }.joined(separator: " ")
                 guard !name.isEmpty || !contact.organizationName.isEmpty else { return }
                 let display = name.isEmpty ? contact.organizationName : name
+                let formatter = CNPostalAddressFormatter()
+                let addresses = contact.postalAddresses
+                    .map { formatter.string(from: $0.value) }
+                    .filter { !$0.isEmpty }
                 out.append(ContactInfo(
                     id: contact.identifier,
                     displayName: display,
@@ -66,7 +95,11 @@ final class ContactsProvider: SearchProvider {
                     emails: contact.emailAddresses.map { String($0.value) },
                     imageData: contact.thumbnailImageData,
                     organization: contact.organizationName.isEmpty ? nil
-                                : contact.organizationName
+                                : contact.organizationName,
+                    birthday: contact.birthday,
+                    jobTitle: contact.jobTitle.isEmpty ? nil : contact.jobTitle,
+                    addresses: addresses,
+                    note: contact.note.isEmpty ? nil : contact.note
                 ))
             }
         } catch {

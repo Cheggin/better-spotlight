@@ -418,6 +418,15 @@ struct ContactRecentInteractionsPane: View {
 struct ContactDetailFromMessage: View {
     let message: ChatMessage
 
+    @State private var replyText = ""
+    @State private var sending = false
+    @State private var sendError: String?
+    @State private var sentFlash = false
+
+    private var contact: ContactInfo? {
+        ContactsProvider.contact(forHandle: message.handle)
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Tokens.Space.md) {
@@ -429,39 +438,22 @@ struct ContactDetailFromMessage: View {
                 HStack(spacing: Tokens.Space.md) {
                     avatar(size: 56)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(message.displayName)
+                        Text(contact?.displayName ?? message.displayName)
                             .font(.system(size: 18, weight: .semibold))
                             .foregroundStyle(Tokens.Color.textPrimary)
                             .lineLimit(2)
-                        Text(message.handle)
-                            .font(.system(size: 12))
-                            .foregroundStyle(Tokens.Color.textTertiary)
+                        if let role = roleLine {
+                            Text(role)
+                                .font(.system(size: 12))
+                                .foregroundStyle(Tokens.Color.textTertiary)
+                                .lineLimit(2)
+                        }
                     }
                 }
 
-                Button {
-                    let recipient = message.handle.addingPercentEncoding(
-                        withAllowedCharacters: .urlPathAllowed) ?? message.handle
-                    if let url = URL(string: "sms:\(recipient)") {
-                        NSWorkspace.shared.open(url)
-                    }
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "bubble.left.and.bubble.right.fill")
-                        Text("Open in Messages").font(Tokens.Typeface.bodyEmphasis)
-                        Spacer()
-                        Image(systemName: "arrow.up.right")
-                            .font(.system(size: 11, weight: .semibold))
-                    }
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, Tokens.Space.md)
-                    .padding(.vertical, 10)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(Tokens.Color.accent)
-                    )
-                }
-                .buttonStyle(PressableStyle())
+                if let c = contact { contactDetailsCard(c) }
+
+                replyBox
 
                 Spacer(minLength: 0)
             }
@@ -470,10 +462,182 @@ struct ContactDetailFromMessage: View {
         .scrollIndicators(.hidden)
     }
 
+    // MARK: - Contact details
+
+    private var roleLine: String? {
+        guard let c = contact else { return message.handle }
+        let parts = [c.jobTitle, c.organization].compactMap { $0 }.filter { !$0.isEmpty }
+        return parts.isEmpty ? message.handle : parts.joined(separator: " · ")
+    }
+
+    @ViewBuilder
+    private func contactDetailsCard(_ c: ContactInfo) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if !c.phoneNumbers.isEmpty {
+                detailRow(icon: "phone.fill", values: c.phoneNumbers)
+            }
+            if !c.emails.isEmpty {
+                detailRow(icon: "envelope.fill", values: c.emails)
+            }
+            if let bday = c.birthday, let label = formatBirthday(bday) {
+                detailRow(icon: "gift.fill", values: [label])
+            }
+            if !c.addresses.isEmpty {
+                detailRow(icon: "mappin.and.ellipse",
+                          values: c.addresses.map { $0.replacingOccurrences(of: "\n", with: ", ") })
+            }
+            if let note = c.note {
+                detailRow(icon: "note.text", values: [note])
+            }
+        }
+        .padding(Tokens.Space.md)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: Tokens.Radius.card, style: .continuous)
+                .fill(Tokens.Color.surfaceRaised)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Tokens.Radius.card, style: .continuous)
+                .strokeBorder(Tokens.Color.hairline, lineWidth: 0.5)
+        )
+    }
+
+    private func detailRow(icon: String, values: [String]) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Tokens.Color.contactTint)
+                .frame(width: 18, alignment: .leading)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(values, id: \.self) { v in
+                    Text(v)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Tokens.Color.textPrimary)
+                        .textSelection(.enabled)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func formatBirthday(_ comps: DateComponents) -> String? {
+        let f = DateFormatter()
+        f.dateFormat = comps.year != nil ? "MMMM d, yyyy" : "MMMM d"
+        if let date = Calendar.current.date(from: comps) {
+            return f.string(from: date)
+        }
+        return nil
+    }
+
+    // MARK: - Reply box
+
+    @ViewBuilder
+    private var replyBox: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("REPLY")
+                .font(Tokens.Typeface.micro)
+                .tracking(0.7)
+                .foregroundStyle(Tokens.Color.textTertiary)
+
+            HStack(alignment: .bottom, spacing: 8) {
+                TextField("iMessage \(contact?.displayName.split(separator: " ").first.map(String.init) ?? message.displayName)…",
+                          text: $replyText, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .lineLimit(1...4)
+                    .font(.system(size: 13))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(Color.white)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .strokeBorder(Tokens.Color.hairline, lineWidth: 0.5)
+                    )
+                    .onSubmit { send() }
+
+                Button(action: send) {
+                    Image(systemName: sending ? "ellipsis" : "arrow.up")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 32, height: 32)
+                        .background(
+                            Circle().fill(canSend ? Tokens.Color.accent
+                                                  : Tokens.Color.accent.opacity(0.4))
+                        )
+                }
+                .buttonStyle(PressableStyle())
+                .disabled(!canSend)
+            }
+
+            HStack {
+                if sentFlash {
+                    Label("Sent", systemImage: "checkmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.green)
+                }
+                if let err = sendError {
+                    Text(err)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.red)
+                        .lineLimit(2)
+                }
+                Spacer()
+                Button {
+                    let recipient = message.handle.addingPercentEncoding(
+                        withAllowedCharacters: .urlPathAllowed) ?? message.handle
+                    if let url = URL(string: "sms:\(recipient)") {
+                        NSWorkspace.shared.open(url)
+                    }
+                } label: {
+                    Text("Open in Messages")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Tokens.Color.accent)
+                }
+                .buttonStyle(.borderless)
+            }
+        }
+    }
+
+    private var canSend: Bool {
+        !sending && !replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func send() {
+        guard canSend else { return }
+        let body = replyText
+        sending = true
+        sendError = nil
+        Task {
+            do {
+                try await MessagesSender.send(text: body, toHandle: message.handle)
+                await MainActor.run {
+                    replyText = ""
+                    sentFlash = true
+                    sending = false
+                    Task {
+                        try? await Task.sleep(nanoseconds: 1_500_000_000)
+                        sentFlash = false
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    sendError = error.localizedDescription
+                    sending = false
+                }
+            }
+        }
+    }
+
+    // MARK: - Avatar
+
     @ViewBuilder
     private func avatar(size: CGFloat) -> some View {
-        if let data = MessagesProvider.imageData(forHandle: message.handle),
-           let img = NSImage(data: data) {
+        let imageData = contact?.imageData ?? MessagesProvider.imageData(forHandle: message.handle)
+        if let data = imageData, let img = NSImage(data: data) {
             Image(nsImage: img).resizable().interpolation(.high)
                 .aspectRatio(contentMode: .fill)
                 .frame(width: size, height: size)
@@ -482,7 +646,7 @@ struct ContactDetailFromMessage: View {
         } else {
             ZStack {
                 Circle().fill(Tokens.Color.contactTint.opacity(0.18))
-                Text(message.initials)
+                Text(contact?.initials ?? message.initials)
                     .font(.system(size: size * 0.36, weight: .semibold))
                     .foregroundStyle(Tokens.Color.contactTint)
             }
