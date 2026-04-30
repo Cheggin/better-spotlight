@@ -68,6 +68,27 @@ struct SearchResult: Identifiable, Hashable {
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
 
+extension SearchResult {
+    /// Intentional All-page Top Hit priority, normalized to 0...1.
+    /// This is separate from generic provider search score.
+    func allPageTopHitPriority(now: Date = Date()) -> Double {
+        switch payload {
+        case .message(let message):
+            guard message.isUnread, !message.isFromMe else { return 0 }
+            let age = now.timeIntervalSince(message.date)
+            guard age >= 0, age <= 3_600 else { return 0 }
+            return 1 - (age / 3_600)
+        case .calendarEvent(let event):
+            guard !event.isAllDay else { return 0 }
+            let secondsUntilStart = event.start.timeIntervalSince(now)
+            guard secondsUntilStart >= 0, secondsUntilStart <= 600 else { return 0 }
+            return 1 - (secondsUntilStart / 600)
+        case .mail, .file, .contact:
+            return 0
+        }
+    }
+}
+
 enum ResultPayload {
     case file(FileInfo)
     case mail(MailMessage)

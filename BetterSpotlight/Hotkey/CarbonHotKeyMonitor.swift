@@ -27,6 +27,7 @@ final class CarbonHotKeyMonitor {
                     .takeUnretainedValue()
                 DispatchQueue.main.async {
                     Log.info("option-shift-space fired", category: "app")
+                    Log.info("hotkey option-shift-space fired", category: "timing")
                     monitor.onTrigger()
                 }
                 return noErr
@@ -52,8 +53,11 @@ final class CarbonHotKeyMonitor {
         )
         if hotKeyStatus == noErr {
             Log.info("option-shift-space registered", category: "app")
+            Log.info("hotkey option-shift-space registered", category: "timing")
         } else {
             Log.error("option-shift-space registration failed: \(hotKeyStatus)", category: "app")
+            Log.error("hotkey option-shift-space registration failed: \(hotKeyStatus)",
+                      category: "timing")
         }
     }
 

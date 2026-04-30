@@ -18,6 +18,7 @@ final class SearchCoordinator: ObservableObject {
 
     func attach(googleSession: GoogleSession, preferences: Preferences) {
         guard providers.isEmpty else { return }
+        let start = Date()
         providers = [
             FileProvider(preferences: preferences),
             GmailProvider(googleSession: googleSession),
@@ -26,6 +27,8 @@ final class SearchCoordinator: ObservableObject {
             ContactsProvider(),
         ]
         Log.info("search: attached \(providers.count) providers")
+        Log.info("search attach providers=\(providers.count) +\(Int(Date().timeIntervalSince(start) * 1_000))ms",
+                 category: "timing")
     }
 
     func update(query rawQuery: String) {
@@ -35,8 +38,12 @@ final class SearchCoordinator: ObservableObject {
         providers.forEach { $0.cancel() }
 
         debounce = Task { [weak self] in
+            let debounceStart = Date()
+            Log.info("search debounce begin query='\(query)'", category: "timing")
             try? await Task.sleep(nanoseconds: 140_000_000) // 140ms debounce
             guard !Task.isCancelled else { return }
+            Log.info("search debounce fired query='\(query)' +\(Int(Date().timeIntervalSince(debounceStart) * 1_000))ms",
+                     category: "timing")
             await self?.run(query: query)
         }
     }
@@ -113,35 +120,61 @@ final class SearchCoordinator: ObservableObject {
     private(set) var lastQuery: String = ""
 
     private func run(query: String) async {
+        let searchStart = Date()
         isLoading = true
         lastQuery = query
-        defer { isLoading = false }
+        Log.info("search run begin query='\(query)' providers=\(providers.count)",
+                 category: "timing")
+        defer {
+            isLoading = false
+            Log.info("search run complete query='\(query)' total=\(results.count) +\(Int(Date().timeIntervalSince(searchStart) * 1_000))ms",
+                     category: "timing")
+        }
 
         // Both empty and non-empty queries hit all providers — providers themselves
         // decide what to do with an empty query (e.g. recent files / upcoming events).
         var merged: [SearchResult] = []
-        await withTaskGroup(of: [SearchResult].self) { group in
+        await withTaskGroup(of: (String, [SearchResult], Int).self) { group in
             for provider in providers {
                 let label = provider.category.title
                 group.addTask { [provider] in
-                    do { return try await provider.search(query: query) }
+                    let providerStart = Date()
+                    Log.info("provider \(label) begin query='\(query)'", category: "timing")
+                    do {
+                        let results = try await provider.search(query: query)
+                        let ms = Int(Date().timeIntervalSince(providerStart) * 1_000)
+                        Log.info("provider \(label) complete count=\(results.count) +\(ms)ms",
+                                 category: "timing")
+                        return (label, results, ms)
+                    }
                     catch {
                         Log.warn("provider \(label) failed: \(error)")
-                        return []
+                        let ms = Int(Date().timeIntervalSince(providerStart) * 1_000)
+                        Log.info("provider \(label) failed +\(ms)ms error=\(error.localizedDescription)",
+                                 category: "timing")
+                        return (label, [], ms)
                     }
                 }
             }
-            for await chunk in group {
+            for await (label, chunk, providerMs) in group {
                 merged.append(contentsOf: chunk)
                 self.results = self.rank(merged)
                 self.counts = self.countByCategory(self.results)
+                Log.info("search merge provider=\(label) providerMs=\(providerMs) merged=\(merged.count) totalElapsed=\(Int(Date().timeIntervalSince(searchStart) * 1_000))ms",
+                         category: "timing")
             }
         }
         Log.info("search query='\(query)' total=\(self.results.count)", category: "search")
     }
 
     private func rank(_ items: [SearchResult]) -> [SearchResult] {
-        items.sorted { $0.score > $1.score }
+        let now = Date()
+        return items.sorted { lhs, rhs in
+            let lhsPriority = lhs.allPageTopHitPriority(now: now)
+            let rhsPriority = rhs.allPageTopHitPriority(now: now)
+            if lhsPriority != rhsPriority { return lhsPriority > rhsPriority }
+            return lhs.score > rhs.score
+        }
     }
 
     private func countByCategory(_ items: [SearchResult]) -> [SearchCategory: Int] {

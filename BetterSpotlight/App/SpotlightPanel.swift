@@ -41,23 +41,34 @@ final class SpotlightPanelController {
     private var resignNotification: Any?
 
     init(googleSession: GoogleSession, preferences: Preferences) {
+        let initStart = Date()
+        func timing(_ label: String) {
+            let ms = Int(Date().timeIntervalSince(initStart) * 1_000)
+            Log.info("panel init \(label) +\(ms)ms", category: "timing")
+        }
+
         self.googleSession = googleSession
         self.preferences = preferences
+        timing("dependencies assigned")
 
         let size = NSSize(width: 1080, height: 640)
         let frame = NSRect(origin: .zero, size: size)
         let panel = SpotlightPanel(contentRect: frame)
+        timing("panel allocated")
 
         let root = RootView()
             .environmentObject(googleSession)
             .environmentObject(preferences)
             .frame(width: size.width, height: size.height)
+        timing("root view composed")
 
         let host = NSHostingView(rootView: root)
         host.frame = frame
+        timing("hosting view allocated")
         panel.contentView = host
         panel.setContentSize(size)
         self.panel = panel
+        timing("content installed")
 
         NotificationCenter.default.addObserver(
             forName: .dismissSpotlight,
@@ -66,22 +77,40 @@ final class SpotlightPanelController {
         ) { [weak self] _ in
             Task { @MainActor in self?.hide() }
         }
+        timing("dismiss observer installed")
     }
 
     func toggle() {
+        Log.info("panel toggle visible=\(panel.isVisible)", category: "timing")
         if panel.isVisible { hide() } else { show() }
     }
 
     func show() {
+        let showStart = Date()
+        func timing(_ label: String) {
+            let ms = Int(Date().timeIntervalSince(showStart) * 1_000)
+            Log.info("panel show \(label) +\(ms)ms", category: "timing")
+        }
+
+        timing("begin")
         positionAtTopThird()
+        timing("positioned")
         panel.makeKeyAndOrderFront(nil)
+        timing("ordered front")
         NSApp.activate(ignoringOtherApps: true)
+        timing("app activated")
         installLocalEscapeMonitor()
+        timing("escape monitor installed")
         installDismissOnOutsideClick()
+        timing("outside click monitor installed")
         installResignKeyDismiss()
+        timing("resign monitor installed")
+        timing("complete")
     }
 
     func hide() {
+        let hideStart = Date()
+        Log.info("panel hide begin", category: "timing")
         panel.orderOut(nil)
         if let m = localKeyMonitor { NSEvent.removeMonitor(m); localKeyMonitor = nil }
         if let m = globalClickMonitor { NSEvent.removeMonitor(m); globalClickMonitor = nil }
@@ -90,6 +119,8 @@ final class SpotlightPanelController {
             NotificationCenter.default.removeObserver(n)
             resignNotification = nil
         }
+        let ms = Int(Date().timeIntervalSince(hideStart) * 1_000)
+        Log.info("panel hide complete +\(ms)ms", category: "timing")
     }
 
     private func positionAtTopThird() {

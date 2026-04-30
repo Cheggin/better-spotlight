@@ -17,7 +17,20 @@ struct ResultsList: View {
     }
 
     private var topHit: SearchResult? {
-        results.first(where: { !preferences.isFavorite($0.id) })
+        let candidates = results.filter { !preferences.isFavorite($0.id) }
+        guard category == .all else { return candidates.first }
+
+        let now = Date()
+        if let urgent = candidates
+            .compactMap({ result -> (SearchResult, Double)? in
+                let priority = result.allPageTopHitPriority(now: now)
+                return priority > 0 ? (result, priority) : nil
+            })
+            .max(by: { $0.1 < $1.1 })?.0 {
+            return urgent
+        }
+
+        return candidates.first { $0.category != .mail }
     }
 
     private var groupedTail: [(SearchCategory, [SearchResult])] {
@@ -116,21 +129,11 @@ struct ResultsList: View {
     private func inlineCTA(for cat: SearchCategory) -> some View {
         switch cat {
         case .calendar:
-            InlineLinkRow(
-                iconImage: BundledIcon.image(named: "google-calendar"),
-                title: "View Calendar",
-                subtitle: "Open in Google Calendar",
-                trailing: "arrow.up.right.square"
-            ) {
+            InlineLinkRow(title: "View Calendar") {
                 NSWorkspace.shared.open(URL(string: "https://calendar.google.com/")!)
             }
         case .mail:
-            InlineLinkRow(
-                iconImage: BundledIcon.image(named: "gmail"),
-                title: "Search in Gmail",
-                subtitle: "Open Gmail",
-                trailing: "chevron.right"
-            ) {
+            InlineLinkRow(title: "Search in Gmail") {
                 NSWorkspace.shared.open(URL(string: "https://mail.google.com/")!)
             }
         default: EmptyView()
@@ -167,6 +170,17 @@ private struct TopHitCard: View {
 
             Spacer(minLength: 4)
 
+            if let label = urgencyLabel {
+                Text(label)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(result.category.tint)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(
+                        Capsule().fill(result.category.tint.opacity(0.14))
+                    )
+            }
+
             Image(systemName: "return")
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(Tokens.Color.textTertiary)
@@ -180,12 +194,13 @@ private struct TopHitCard: View {
         .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(isSelected ? Tokens.Color.selection :
-                      hovering ? Color.black.opacity(0.04) : Tokens.Color.surfaceRaised)
+                .fill(isSelected ? Tokens.Color.surfaceRaised :
+                      hovering ? Color.black.opacity(0.04) : .clear)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Tokens.Color.hairline, lineWidth: 0.5)
+                .strokeBorder(isSelected ? Tokens.Color.hairline : .clear,
+                              lineWidth: 0.5)
         )
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
@@ -202,6 +217,18 @@ private struct TopHitCard: View {
         case .file:          return "File"
         case .message:       return "Messages"
         case .contact:       return "Contacts"
+        }
+    }
+
+    private var urgencyLabel: String? {
+        switch result.payload {
+        case .message(let message):
+            return message.isUnread && !message.isFromMe
+                && result.allPageTopHitPriority() > 0 ? "Unread" : nil
+        case .calendarEvent:
+            return result.allPageTopHitPriority() > 0 ? "Soon" : nil
+        case .mail, .file, .contact:
+            return nil
         }
     }
 }
@@ -291,46 +318,30 @@ private struct ResultRow: View {
 // MARK: - Inline CTA row ("View Calendar", "Search in Gmail")
 
 private struct InlineLinkRow: View {
-    let iconImage: NSImage?
     let title: String
-    let subtitle: String
-    let trailing: String
     var action: () -> Void
 
     @State private var hovering = false
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 8) {
-                Group {
-                    if let iconImage {
-                        Image(nsImage: iconImage)
-                            .resizable()
-                            .interpolation(.high)
-                            .aspectRatio(contentMode: .fit)
-                    } else {
-                        Image(systemName: "link")
-                    }
-                }
-                .frame(width: 22, height: 22)
-
-                Text(title)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(Tokens.Color.textPrimary)
-
+            HStack(spacing: 6) {
                 Spacer()
-
-                Image(systemName: trailing)
+                Text(title)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Tokens.Color.accent)
+                Image(systemName: "arrow.up.right.square")
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(Tokens.Color.textTertiary)
+                    .foregroundStyle(Tokens.Color.accent)
+                Spacer()
             }
             .padding(.horizontal, 6)
-            .padding(.vertical, 4)
+            .padding(.vertical, 6)
             .background(
-                RoundedRectangle(cornerRadius: Tokens.Radius.row, style: .continuous)
-                    .fill(hovering ? Color.black.opacity(0.03) : .clear)
+                Capsule()
+                    .fill(hovering ? Tokens.Color.accentSoft : .clear)
             )
-            .contentShape(Rectangle())
+            .contentShape(Capsule())
         }
         .buttonStyle(PressableStyle())
         .onHover { hovering = $0 }

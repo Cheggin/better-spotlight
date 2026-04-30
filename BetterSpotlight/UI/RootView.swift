@@ -70,9 +70,17 @@ struct RootView: View {
         }
         .animation(.easeOut(duration: 0.18), value: composerStart)
         .onAppear {
+            let start = Date()
+            Log.info("root onAppear begin", category: "timing")
             coordinator.attach(googleSession: googleSession, preferences: preferences)
+            Log.info("root attach complete +\(Int(Date().timeIntervalSince(start) * 1_000))ms",
+                     category: "timing")
             coordinator.update(query: "")
+            Log.info("root initial search scheduled +\(Int(Date().timeIntervalSince(start) * 1_000))ms",
+                     category: "timing")
             coordinator.startPolling()
+            Log.info("root polling started +\(Int(Date().timeIntervalSince(start) * 1_000))ms",
+                     category: "timing")
         }
         .onDisappear { coordinator.stopPolling() }
         .onChange(of: query) { _, new in coordinator.update(query: new) }

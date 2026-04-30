@@ -92,7 +92,7 @@ final class MessagesProvider: SearchProvider {
             return SearchResult(
                 id: "msg:\(msg.rowID)",
                 title: displayName,
-                subtitle: msg.text.replacingOccurrences(of: "\n", with: " "),
+                subtitle: "\(msg.isUnread && !msg.isFromMe ? "Unread · " : "")\(msg.text.replacingOccurrences(of: "\n", with: " "))",
                 trailingText: msg.relativeDate,
                 iconName: "bubble.left.fill",
                 category: .messages,
@@ -220,7 +220,8 @@ final class MessagesProvider: SearchProvider {
                 handle: $0.handle,
                 text: $0.text,
                 date: $0.date,
-                isFromMe: $0.isFromMe
+                isFromMe: $0.isFromMe,
+                isUnread: $0.isUnread
             )
         }
         return messages.reversed() // chronological (oldest → newest)
@@ -279,7 +280,7 @@ private enum ChatDB {
     /// callers can build query-specific constraints.
     static func selectSQL(whereClause: String, limit: Int) -> String {
         """
-        SELECT m.ROWID, m.text, m.date, m.is_from_me,
+        SELECT m.ROWID, m.text, m.date, m.is_from_me, m.is_read,
                COALESCE(h.id, '') AS handle,
                COALESCE(quote(m.attributedBody), '')
         FROM message m
@@ -357,16 +358,17 @@ private enum ChatDB {
         let raw = String(data: data, encoding: .utf8) ?? ""
         var out: [RawMessage] = []
         for record in raw.split(separator: "\u{1E}", omittingEmptySubsequences: true) {
-            let cols = record.split(separator: "\u{1F}", maxSplits: 5,
+            let cols = record.split(separator: "\u{1F}", maxSplits: 6,
                                     omittingEmptySubsequences: false)
-            guard cols.count == 6,
+            guard cols.count == 7,
                   let rowID = Int(cols[0]),
                   let dateNS = Double(cols[2])
             else { continue }
             var text = String(cols[1])
             let isFromMe = (Int(cols[3]) ?? 0) == 1
-            let handle = String(cols[4])
-            let attributedQuoted = String(cols[5])
+            let isUnread = (Int(cols[4]) ?? 1) == 0
+            let handle = String(cols[5])
+            let attributedQuoted = String(cols[6])
             let seconds = dateNS > 1_000_000_000_000 ? dateNS / 1_000_000_000 : dateNS
             let date = Date(timeIntervalSince1970: appleEpoch + seconds)
 
@@ -377,7 +379,7 @@ private enum ChatDB {
 
             out.append(RawMessage(
                 rowID: rowID, text: text, date: date,
-                isFromMe: isFromMe, handle: handle
+                isFromMe: isFromMe, isUnread: isUnread, handle: handle
             ))
         }
         return out
@@ -486,6 +488,7 @@ struct RawMessage {
     let text: String
     let date: Date
     let isFromMe: Bool
+    let isUnread: Bool
     let handle: String
 
     var relativeDate: String {
@@ -501,7 +504,8 @@ struct RawMessage {
             handle: handle,
             text: text,
             date: date,
-            isFromMe: isFromMe
+            isFromMe: isFromMe,
+            isUnread: isUnread
         )
     }
 }
@@ -513,6 +517,7 @@ struct ChatMessage: Hashable {
     let text: String
     let date: Date
     let isFromMe: Bool
+    let isUnread: Bool
 
     var relativeDate: String {
         let f = RelativeDateTimeFormatter()

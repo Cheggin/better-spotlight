@@ -64,6 +64,11 @@ tasks:
     cmds:
       - /usr/bin/log stream --predicate 'subsystem == "{{.SUBSYSTEM}}" AND category == "search"' --info --debug --style compact
 
+  logs:timing:
+    desc: Stream launch, panel, and provider timing logs.
+    cmds:
+      - /usr/bin/log stream --predicate 'subsystem == "{{.SUBSYSTEM}}" AND category == "timing"' --info --debug --style compact
+
   logs:calendar:
     desc: Stream calendar API + provider logs.
     cmds:

@@ -14,22 +14,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var cancellables = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let launchStart = Date()
+        func timing(_ label: String) {
+            let ms = Int(Date().timeIntervalSince(launchStart) * 1_000)
+            Log.info("launch \(label) +\(ms)ms", category: "timing")
+        }
+
+        timing("begin")
         NSApp.setActivationPolicy(.accessory)
+        timing("activation policy set")
 
         Log.info("launching better-spotlight v\(Bundle.main.infoVersion)")
 
         EnvLoader.bootstrap()
+        timing("env loaded")
         googleSession.bootstrap()
+        timing("google bootstrap scheduled")
 
         // Force the macOS TCC permission prompts to appear at launch instead
         // of lazily on first read. Fixes the case where the panel renders an
         // empty "no contacts" state without ever asking the user.
         let cnStatus = CNContactStore.authorizationStatus(for: .contacts)
         Log.info("contacts auth at launch=\(cnStatus.rawValue)", category: "app")
+        timing("contacts auth checked")
         if cnStatus == .notDetermined {
             CNContactStore().requestAccess(for: .contacts) { granted, err in
                 Log.info("contacts requestAccess granted=\(granted) err=\(err?.localizedDescription ?? "nil")",
                          category: "app")
+                Log.info("contacts requestAccess completed granted=\(granted)",
+                         category: "timing")
             }
         }
 
@@ -42,16 +55,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.image?.isTemplate = true
         }
         statusItem.menu = buildStatusMenu()
+        timing("status item built")
 
         panelController = SpotlightPanelController(
             googleSession: googleSession,
             preferences: preferences
         )
+        timing("panel controller initialized")
 
         hotkey = CarbonHotKeyMonitor { [weak self] in
             self?.panelController.toggle()
         }
         hotkey.start()
+        timing("hotkey started")
+        timing("complete")
     }
 
     func applicationWillTerminate(_ notification: Notification) {
