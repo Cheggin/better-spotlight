@@ -1,0 +1,25 @@
+# Build
+build/
+DerivedData/
+*.xcodeproj
+*.xcworkspace
+.swiftpm/
+.build/
+Package.resolved
+
+# Xcode user state
+xcuserdata/
+*.xcuserstate
+
+# macOS
+.DS_Store
+
+# Secrets — real OAuth credentials live in .env (loaded at runtime)
+.env
+BetterSpotlight/Secrets.swift
+
+# Misc
+*.log
+.harness/
+.omc/
+.omx/

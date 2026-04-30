@@ -1,0 +1,58 @@
+version: '3'
+
+vars:
+  PROJECT: BetterSpotlight.xcodeproj
+  SCHEME: BetterSpotlight
+  CONFIG: Debug
+  APP_PATH: build/Build/Products/{{.CONFIG}}/BetterSpotlight.app
+  SUBSYSTEM: com.reagan.betterspotlight
+
+tasks:
+  up:
+    desc: Generate project, build, kill any running instance, launch.
+    cmds:
+      - |
+        if ! command -v xcodegen >/dev/null; then
+          echo "✗ xcodegen not found. Run: brew install xcodegen"; exit 1
+        fi
+        if /usr/bin/xcode-select -p | grep -q CommandLineTools; then
+          echo "✗ Full Xcode required. Run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer"
+          exit 1
+        fi
+      - xcodegen
+      - |
+        if command -v xcbeautify >/dev/null; then PRETTY="xcbeautify"; else PRETTY="cat"; fi
+        set -o pipefail
+        xcodebuild -project {{.PROJECT}} -scheme {{.SCHEME}} \
+          -configuration {{.CONFIG}} -derivedDataPath build \
+          CODE_SIGNING_ALLOWED=NO build | $PRETTY
+      - pkill -f "{{.SCHEME}}.app/Contents/MacOS" 2>/dev/null; sleep 0.3; true
+      - open "{{.APP_PATH}}"
+
+  lint:
+    desc: Typecheck every Swift source against the macOS SDK.
+    cmds:
+      - |
+        swiftc -typecheck -target arm64-apple-macosx14.0 \
+          -sdk "$(xcrun --show-sdk-path --sdk macosx)" \
+          $(find BetterSpotlight -name "*.swift")
+
+  logs:app:
+    desc: Stream all app logs (every category).
+    cmds:
+      - log stream --predicate 'subsystem == "{{.SUBSYSTEM}}"' --info --debug --style compact
+
+  logs:search:
+    desc: Stream search-coordinator logs.
+    cmds:
+      - log stream --predicate 'subsystem == "{{.SUBSYSTEM}}" AND category == "search"' --info --debug --style compact
+
+  logs:calendar:
+    desc: Stream calendar API + provider logs.
+    cmds:
+      - log stream --predicate 'subsystem == "{{.SUBSYSTEM}}" AND category == "calendar"' --info --debug --style compact
+
+  logs:files:
+    desc: Stream file-provider (NSMetadataQuery) logs.
+    cmds:
+      - log stream --predicate 'subsystem == "{{.SUBSYSTEM}}" AND category == "files"' --info --debug --style compact
