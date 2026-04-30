@@ -129,6 +129,24 @@ struct RootView: View {
             )
         case .messages:
             MessagesThreadView(message: selectedMessage)
+        case .mail:
+            MailListView(
+                results: visibleResults,
+                selectedID: $selectedID,
+                onActivate: openSelected
+            )
+        case .files, .folders:
+            FilesGridView(
+                results: visibleResults,
+                selectedID: $selectedID,
+                onActivate: openSelected
+            )
+        case .contacts:
+            ContactsGridView(
+                results: visibleResults,
+                selectedID: $selectedID,
+                onActivate: openSelected
+            )
         default:
             CalendarPane(
                 selectedDate: $selectedDate,
