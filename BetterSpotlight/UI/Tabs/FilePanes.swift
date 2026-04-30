@@ -2,15 +2,15 @@ import SwiftUI
 import AppKit
 import Quartz
 
-/// Files / Folders center pane: full-size QuickLook preview of the selected
-/// file. Falls back to a large icon if no file is selected.
+/// Files center pane: full-size QuickLook preview of the selected file.
+/// Falls back to a large icon if no file is selected. Background is
+/// transparent so the panel's liquid-glass surface shows through.
 struct FileQuickLookPane: View {
     let file: FileInfo?
 
     var body: some View {
         if let file {
             QuickLookView(url: file.url)
-                .background(Color(red: 0.97, green: 0.97, blue: 0.98))
         } else {
             VStack(spacing: Tokens.Space.sm) {
                 Spacer()
@@ -23,8 +23,142 @@ struct FileQuickLookPane: View {
                 Spacer()
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(red: 0.97, green: 0.97, blue: 0.98))
         }
+    }
+}
+
+/// Folders center pane: lists the contents of the currently-selected folder
+/// in a Finder-like single-column. Each row is a clickable file or
+/// subfolder. Picking a sub-row updates `selectedID`, which routes to the
+/// folder's own metadata in the right pane.
+struct FolderContentsPane: View {
+    let folder: FileInfo?
+    @Binding var selectedID: SearchResult.ID?
+
+    @State private var entries: [URL] = []
+    @State private var loading = false
+    @State private var error: String?
+
+    var body: some View {
+        if let folder {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 6) {
+                    Image(systemName: "folder.fill")
+                        .foregroundStyle(Tokens.Color.folderTint)
+                    Text(folder.url.lastPathComponent)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Tokens.Color.textPrimary)
+                    Spacer()
+                    Button {
+                        NSWorkspace.shared.open(folder.url)
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.up.right.square")
+                            Text("Open in Finder").font(.system(size: 12, weight: .medium))
+                        }
+                        .foregroundStyle(Tokens.Color.accent)
+                    }
+                    .buttonStyle(.borderless)
+                }
+                .padding(.horizontal, Tokens.Space.md)
+                .padding(.top, Tokens.Space.md)
+                .padding(.bottom, Tokens.Space.xs)
+
+                Divider().opacity(0.4)
+
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        if loading {
+                            ProgressView().padding(Tokens.Space.lg)
+                        } else if let error {
+                            Text(error)
+                                .font(.system(size: 12))
+                                .foregroundStyle(.red)
+                                .padding(Tokens.Space.md)
+                        } else if entries.isEmpty {
+                            Text("Empty folder")
+                                .font(.system(size: 12))
+                                .foregroundStyle(Tokens.Color.textTertiary)
+                                .padding(Tokens.Space.md)
+                        } else {
+                            ForEach(entries, id: \.self) { url in
+                                FolderRow(url: url)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, Tokens.Space.sm)
+                    .padding(.vertical, Tokens.Space.xs)
+                }
+                .scrollIndicators(.hidden)
+            }
+            .task(id: folder.url) { await load(folder.url) }
+        } else {
+            VStack(spacing: Tokens.Space.sm) {
+                Spacer()
+                Image(systemName: "folder")
+                    .font(.system(size: 40, weight: .light))
+                    .foregroundStyle(Tokens.Color.textTertiary)
+                Text("Select a folder to browse")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Tokens.Color.textSecondary)
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private func load(_ url: URL) async {
+        loading = true
+        defer { loading = false }
+        error = nil
+        do {
+            let contents = try FileManager.default.contentsOfDirectory(
+                at: url,
+                includingPropertiesForKeys: [.isDirectoryKey, .contentModificationDateKey],
+                options: [.skipsHiddenFiles]
+            )
+            entries = contents.sorted { a, b in
+                let aDir = (try? a.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+                let bDir = (try? b.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+                if aDir != bDir { return aDir }
+                return a.lastPathComponent.localizedCaseInsensitiveCompare(b.lastPathComponent) == .orderedAscending
+            }
+        } catch {
+            self.error = error.localizedDescription
+            entries = []
+        }
+    }
+}
+
+private struct FolderRow: View {
+    let url: URL
+    @State private var hovering = false
+
+    var body: some View {
+        let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+        Button {
+            NSWorkspace.shared.open(url)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: isDir ? "folder.fill" : "doc")
+                    .font(.system(size: 12))
+                    .foregroundStyle(isDir ? Tokens.Color.folderTint : Tokens.Color.fileTint)
+                    .frame(width: 16)
+                Text(url.lastPathComponent)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Tokens.Color.textPrimary)
+                    .lineLimit(1)
+                Spacer()
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(hovering ? Color.black.opacity(0.05) : .clear)
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
     }
 }
 

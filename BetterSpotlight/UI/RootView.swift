@@ -10,6 +10,8 @@ struct RootView: View {
     @State private var selectedID: SearchResult.ID?
     @State private var selectedDate: Date = Calendar.current.startOfDay(for: Date())
     @State private var composerStart: Date?
+    /// Calendar popover only opens on explicit click — not auto-selection.
+    @State private var showCalendarPopover: Bool = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -56,12 +58,14 @@ struct RootView: View {
                 )
                 .environmentObject(googleSession)
                 .transition(.scale.combined(with: .opacity))
-            } else if category == .calendar, let result = selectedResult,
-                      result.payload.isCalendarEvent,
-                      let id = selectedID, !id.isEmpty {
+            } else if category == .calendar, showCalendarPopover,
+                      let result = selectedResult,
+                      result.payload.isCalendarEvent {
                 // Calendar tab is full-window, so its event detail floats above.
-                FloatingDetailCard(result: result) { selectedID = nil }
-                    .transition(.scale.combined(with: .opacity))
+                FloatingDetailCard(result: result) {
+                    showCalendarPopover = false
+                }
+                .transition(.scale.combined(with: .opacity))
             }
         }
         .animation(.easeOut(duration: 0.18), value: composerStart)
@@ -77,6 +81,7 @@ struct RootView: View {
         }
         .onChange(of: category) { _, _ in
             selectedID = visibleResults.first?.id
+            showCalendarPopover = false
         }
         .preferredColorScheme(.light)
         .background(Color.clear)
@@ -126,7 +131,10 @@ struct RootView: View {
             CalendarFullMonthView(
                 selectedDate: $selectedDate,
                 allEvents: allEvents,
-                onSelectEvent: { selectedID = "event:\($0.id)" },
+                onSelectEvent: {
+                    selectedID = "event:\($0.id)"
+                    showCalendarPopover = true
+                },
                 onCreateEvent: { composerStart = $0 }
             )
         case .messages:
@@ -134,9 +142,13 @@ struct RootView: View {
         case .mail:
             // Mail center: full message body of the selected mail.
             DetailPane(result: selectedResult)
-                .background(Color(red: 0.97, green: 0.97, blue: 0.98))
-        case .files, .folders:
+        case .files:
             FileQuickLookPane(file: selectedFile)
+        case .folders:
+            // Folders center: list the contents of the selected folder
+            // (QuickLook of a directory renders empty).
+            FolderContentsPane(folder: selectedFile,
+                               selectedID: $selectedID)
         case .contacts:
             ContactEditPane(contact: selectedContact,
                             googleSession: googleSession)

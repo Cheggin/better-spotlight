@@ -39,7 +39,6 @@ struct ContactEditPane: View {
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(red: 0.97, green: 0.97, blue: 0.98))
     }
 
     private func content(for contact: ContactInfo) -> some View {
@@ -111,7 +110,6 @@ struct ContactEditPane: View {
             }
             .padding(Tokens.Space.lg)
         }
-        .background(Color(red: 0.97, green: 0.97, blue: 0.98))
         .scrollIndicators(.hidden)
     }
 
