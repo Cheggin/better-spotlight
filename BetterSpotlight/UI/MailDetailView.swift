@@ -17,13 +17,9 @@ struct MailDetailView: View {
                     .lineLimit(3)
 
                 HStack(spacing: Tokens.Space.sm) {
-                    ZStack {
-                        Circle().fill(Tokens.Color.mailTint.opacity(0.18))
-                        Text(message.fromInitials)
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(Tokens.Color.mailTint)
-                    }
-                    .frame(width: 32, height: 32)
+                    SenderAvatar(email: message.fromEmail,
+                                 displayName: message.fromName,
+                                 size: 32)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(message.fromName)
                             .font(Tokens.Typeface.bodyEmphasis)
