@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import Combine
+import Contacts
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -19,6 +20,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         EnvLoader.bootstrap()
         googleSession.bootstrap()
+
+        // Force the macOS TCC permission prompts to appear at launch instead
+        // of lazily on first read. Fixes the case where the panel renders an
+        // empty "no contacts" state without ever asking the user.
+        let cnStatus = CNContactStore.authorizationStatus(for: .contacts)
+        Log.info("contacts auth at launch=\(cnStatus.rawValue)", category: "app")
+        if cnStatus == .notDetermined {
+            CNContactStore().requestAccess(for: .contacts) { granted, err in
+                Log.info("contacts requestAccess granted=\(granted) err=\(err?.localizedDescription ?? "nil")",
+                         category: "app")
+            }
+        }
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {

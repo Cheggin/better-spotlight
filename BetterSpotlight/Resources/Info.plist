@@ -8,6 +8,8 @@
 	<string>Better Spotlight</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -26,6 +28,8 @@
 	<string>Better Spotlight uses Apple Events to open files you select.</string>
 	<key>NSCalendarsUsageDescription</key>
 	<string>Better Spotlight reads your Google Calendar via the Google API; this entitlement is reserved for future native Calendar integration.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Better Spotlight reads your contacts to show real names and photos for senders in Mail, Messages, and Calendar.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string></string>
 </dict>
