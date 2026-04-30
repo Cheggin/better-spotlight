@@ -4,7 +4,8 @@ vars:
   PROJECT: BetterSpotlight.xcodeproj
   SCHEME: BetterSpotlight
   CONFIG: Debug
-  APP_PATH: build/Build/Products/{{.CONFIG}}/BetterSpotlight.app
+  BUILD_APP_PATH: build/Build/Products/{{.CONFIG}}/BetterSpotlight.app
+  APP_PATH: '$HOME/Applications/BetterSpotlight.app'
   SUBSYSTEM: com.reagan.betterspotlight
 
 tasks:
@@ -23,14 +24,25 @@ tasks:
       - |
         if command -v xcbeautify >/dev/null; then PRETTY="xcbeautify"; else PRETTY="cat"; fi
         set -o pipefail
+        TEAM="${DEVELOPMENT_TEAM:-BMM76ZM4ZG}"
         xcodebuild -project {{.PROJECT}} -scheme {{.SCHEME}} \
           -configuration {{.CONFIG}} -derivedDataPath build \
-          CODE_SIGNING_ALLOWED=NO build | $PRETTY
-      - pkill -f "{{.SCHEME}}.app/Contents/MacOS" 2>/dev/null; sleep 0.3; true
+          DEVELOPMENT_TEAM="$TEAM" \
+          CODE_SIGN_STYLE=Manual \
+          CODE_SIGN_IDENTITY="Developer ID Application" \
+          ENABLE_DEBUG_DYLIB=NO \
+          build | $PRETTY
+      - |
+        pkill -f "{{.SCHEME}}.app/Contents/MacOS" 2>/dev/null || true
+        sleep 0.3
+      - |
+        mkdir -p "$HOME/Applications"
+        rm -rf "{{.APP_PATH}}"
+        cp -R "{{.BUILD_APP_PATH}}" "{{.APP_PATH}}"
       - open "{{.APP_PATH}}"
 
   show:
-    desc: Open the spotlight panel (works without the dual-cmd hotkey).
+    desc: Open the spotlight panel.
     cmds:
       - open "betterspotlight://show"
 
@@ -45,37 +57,37 @@ tasks:
   logs:app:
     desc: Stream all app logs (every category).
     cmds:
-      - log stream --predicate 'subsystem == "{{.SUBSYSTEM}}"' --info --debug --style compact
+      - /usr/bin/log stream --predicate 'subsystem == "{{.SUBSYSTEM}}"' --info --debug --style compact
 
   logs:search:
     desc: Stream search-coordinator logs.
     cmds:
-      - log stream --predicate 'subsystem == "{{.SUBSYSTEM}}" AND category == "search"' --info --debug --style compact
+      - /usr/bin/log stream --predicate 'subsystem == "{{.SUBSYSTEM}}" AND category == "search"' --info --debug --style compact
 
   logs:calendar:
     desc: Stream calendar API + provider logs.
     cmds:
-      - log stream --predicate 'subsystem == "{{.SUBSYSTEM}}" AND category == "calendar"' --info --debug --style compact
+      - /usr/bin/log stream --predicate 'subsystem == "{{.SUBSYSTEM}}" AND category == "calendar"' --info --debug --style compact
 
   logs:files:
     desc: Stream file-provider (NSMetadataQuery) logs.
     cmds:
-      - log stream --predicate 'subsystem == "{{.SUBSYSTEM}}" AND category == "files"' --info --debug --style compact
+      - /usr/bin/log stream --predicate 'subsystem == "{{.SUBSYSTEM}}" AND category == "files"' --info --debug --style compact
 
   logs:messages:
     desc: Stream Messages provider + chat.db / Contacts auth logs.
     cmds:
-      - log stream --predicate 'subsystem == "{{.SUBSYSTEM}}" AND category == "messages"' --info --debug --style compact
+      - /usr/bin/log stream --predicate 'subsystem == "{{.SUBSYSTEM}}" AND category == "messages"' --info --debug --style compact
 
   logs:contacts:
     desc: Stream Contacts provider logs.
     cmds:
-      - log stream --predicate 'subsystem == "{{.SUBSYSTEM}}" AND category == "contacts"' --info --debug --style compact
+      - /usr/bin/log stream --predicate 'subsystem == "{{.SUBSYSTEM}}" AND category == "contacts"' --info --debug --style compact
 
   logs:mail:
     desc: Stream Gmail API + provider logs.
     cmds:
-      - log stream --predicate 'subsystem == "{{.SUBSYSTEM}}" AND category == "mail"' --info --debug --style compact
+      - /usr/bin/log stream --predicate 'subsystem == "{{.SUBSYSTEM}}" AND category == "mail"' --info --debug --style compact
 
   package:
     desc: Build Release, package as DMG in dist/.

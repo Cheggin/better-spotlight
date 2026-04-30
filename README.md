@@ -1,7 +1,7 @@
 # Better Spotlight
 
 A macOS Spotlight replacement that bundles Gmail, Google Calendar, and scoped local file
-search behind a single keyboard shortcut: **press both Shift keys at the same time**.
+search behind a single keyboard shortcut: **Option-Shift-Space**.
 
 Liquid-glass UI inspired by Apple's Spotlight, two-pane layout with a calendar/event
 detail on the right.
@@ -24,14 +24,14 @@ task lint    # typechecks every Swift source against the macOS SDK
    small status item with a Settings menu).
 2. Open Settings, sign in with Google (browser opens, PKCE OAuth flow).
 3. Add folders to "Searchable folders" (e.g. `~/Documents`, `~/Downloads`,
-   `~/Desktop`). The file provider scopes `NSMetadataQuery` to these.
-4. Press both shifts simultaneously to summon the panel.
+   `~/Desktop`). You can choose multiple folders in one picker, and the app
+   stores read-only bookmarks for those folders.
+4. Press Option-Shift-Space to summon the panel.
 
 ## Hotkey notes
 
-`NSEvent.addGlobalMonitorForEvents` is used for `.flagsChanged` events. macOS may
-prompt for **Accessibility** permission the first time — grant it under
-System Settings → Privacy & Security → Accessibility.
+Option-Shift-Space uses the macOS system hotkey API and does not require
+Accessibility permission.
 
 ## Secrets
 

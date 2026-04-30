@@ -10,7 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var statusItem: NSStatusItem!
     private var panelController: SpotlightPanelController!
-    private var hotkey: DualCmdMonitor!
+    private var hotkey: CarbonHotKeyMonitor!
     private var cancellables = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -48,7 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             preferences: preferences
         )
 
-        hotkey = DualCmdMonitor { [weak self] in
+        hotkey = CarbonHotKeyMonitor { [weak self] in
             self?.panelController.toggle()
         }
         hotkey.start()

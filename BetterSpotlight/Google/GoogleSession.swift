@@ -15,7 +15,8 @@ final class GoogleSession: ObservableObject {
     nonisolated init() {}
 
     func bootstrap() {
-        if let stored = tokenStore.load() {
+        Task {
+            guard let stored = await Self.loadStoredTokens() else { return }
             self.accessToken = stored.accessToken
             self.refreshToken = stored.refreshToken
             self.expiry = stored.expiresAt
@@ -23,6 +24,12 @@ final class GoogleSession: ObservableObject {
             self.isSignedIn = true
             Log.info("google: restored session for \(stored.email ?? "unknown")")
         }
+    }
+
+    private nonisolated static func loadStoredTokens() async -> StoredTokens? {
+        await Task.detached(priority: .utility) {
+            TokenStore(account: "google").load()
+        }.value
     }
 
     func signIn() async {
