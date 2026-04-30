@@ -72,8 +72,24 @@ enum FileFilter {
         "Icon\r",                       // legacy custom-icon marker
     ]
 
+    /// Bundle extensions macOS shows as opaque files in Finder, even though
+    /// the filesystem treats them as directories. Used to keep them out of the
+    /// Folders tab and to avoid surfacing their internal contents.
+    static let bundleExtensions: Set<String> = [
+        "app", "xcodeproj", "xcworkspace", "playground",
+        "framework", "bundle", "kext", "plugin",
+        "pages", "numbers", "key",
+        "rtfd",
+        "photoslibrary", "musiclibrary", "tvlibrary", "imovielibrary",
+        "logicx", "garageband",
+    ]
+
     /// Returns true if the URL should be shown to the user.
-    static func shouldShow(_ url: URL, isDirectory: Bool = false) -> Bool {
+    /// `requestedAsDirectory` should be true when the caller is filtering for
+    /// the Folders tab (so we exclude bundles entirely from that view).
+    static func shouldShow(_ url: URL,
+                           isDirectory: Bool = false,
+                           requestedAsDirectory: Bool = false) -> Bool {
         let name = url.lastPathComponent
 
         // Hidden — by name. NSMetadataQuery sometimes returns these even though
@@ -83,17 +99,30 @@ enum FileFilter {
         }
         if junkBasenames.contains(name) { return false }
 
-        // Extension match
         let ext = url.pathExtension.lowercased()
         if !ext.isEmpty, junkExtensions.contains(ext) { return false }
 
-        // Walk path components — if any is a known junk dir, drop it.
-        for component in url.pathComponents {
+        // Bundles: only valid in the Files view (e.g. .app launchers).
+        // Never let them appear as folders, and never surface anything that
+        // lives inside one.
+        if !ext.isEmpty, bundleExtensions.contains(ext) {
+            if requestedAsDirectory { return false }
+            // It's the bundle itself — allow as a "file".
+        }
+        // Path-based: if any ancestor component is a bundle, drop the descendant.
+        for component in url.pathComponents.dropLast() {
+            let cExt = (component as NSString).pathExtension.lowercased()
+            if !cExt.isEmpty, bundleExtensions.contains(cExt) { return false }
             if junkDirComponents.contains(component) { return false }
         }
-
-        // Allow .app bundles (treated as files for users), apps live under /Applications
-        // — don't filter those out even though they end in `.app`.
         return true
+    }
+
+    /// Convenience for `FileProvider`: a result is treated as a folder only
+    /// when it's a real directory AND not a bundle.
+    static func isDisplayedAsFolder(url: URL, fsIsDirectory: Bool) -> Bool {
+        guard fsIsDirectory else { return false }
+        let ext = url.pathExtension.lowercased()
+        return !bundleExtensions.contains(ext)
     }
 }

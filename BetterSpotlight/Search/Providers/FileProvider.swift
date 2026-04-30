@@ -88,14 +88,16 @@ final class FileProvider: NSObject, SearchProvider {
     nonisolated private static func makeResult(item: NSMetadataItem, query: String) -> SearchResult? {
         guard let path = item.value(forAttribute: NSMetadataItemPathKey) as? String else { return nil }
         let url = URL(fileURLWithPath: path)
-        let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+        let fsIsDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+        let displayedAsFolder = FileFilter.isDisplayedAsFolder(url: url, fsIsDirectory: fsIsDir)
         let size = item.value(forAttribute: NSMetadataItemFSSizeKey) as? Int64
         let modified = item.value(forAttribute: NSMetadataItemFSContentChangeDateKey) as? Date
         let kind = item.value(forAttribute: NSMetadataItemKindKey) as? String
 
-        let info = FileInfo(url: url, isDirectory: isDir, sizeBytes: size, modified: modified, kind: kind)
+        let info = FileInfo(url: url, isDirectory: displayedAsFolder,
+                            sizeBytes: size, modified: modified, kind: kind)
 
-        let category: SearchCategory = isDir ? .folders : .files
+        let category: SearchCategory = displayedAsFolder ? .folders : .files
         let title = url.lastPathComponent
         let parent = info.parentPathDisplay
         let modifiedShort: String? = modified.map { d in
