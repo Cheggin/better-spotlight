@@ -8,13 +8,14 @@ struct SettingsView: View {
     @State private var tab: Tab = .general
 
     enum Tab: String, CaseIterable {
-        case general, google, folders
+        case general, google, folders, messages
         var title: String { rawValue.capitalized }
         var symbol: String {
             switch self {
-            case .general: return "gearshape"
-            case .google:  return "person.crop.circle.badge.checkmark"
-            case .folders: return "folder"
+            case .general:  return "gearshape"
+            case .google:   return "person.crop.circle.badge.checkmark"
+            case .folders:  return "folder"
+            case .messages: return "bubble.left.and.bubble.right"
             }
         }
     }
@@ -50,10 +51,60 @@ struct SettingsView: View {
     @ViewBuilder
     private var content: some View {
         switch tab {
-        case .general: generalContent
-        case .google:  googleContent
-        case .folders: foldersContent
+        case .general:  generalContent
+        case .google:   googleContent
+        case .folders:  foldersContent
+        case .messages: messagesContent
         }
+    }
+
+    private var messagesContent: some View {
+        VStack(alignment: .leading, spacing: Tokens.Space.md) {
+            SectionCard(title: "iMessage / SMS") {
+                Text("Better Spotlight reads chat history directly from\n~/Library/Messages/chat.db. macOS protects this file with **Full Disk Access**.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Tokens.Color.textPrimary)
+                Divider()
+                if isMessagesReadable {
+                    HStack(spacing: 6) {
+                        Circle().fill(Color.green).frame(width: 8, height: 8)
+                        Text("Full Disk Access granted")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Tokens.Color.textSecondary)
+                    }
+                } else {
+                    HStack(spacing: 6) {
+                        Circle().fill(Color.orange).frame(width: 8, height: 8)
+                        Text("Full Disk Access required")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Tokens.Color.textSecondary)
+                    }
+                    Button {
+                        let url = URL(string:
+                            "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!
+                        NSWorkspace.shared.open(url)
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.up.right.square")
+                            Text("Open Privacy Settings")
+                        }
+                        .font(.system(size: 13, weight: .medium))
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(Tokens.Color.accent)
+                    Text("After granting access, fully quit Better Spotlight (⌃⌥⌘ then click Quit) and relaunch.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Tokens.Color.textTertiary)
+                }
+            }
+            Spacer()
+        }
+    }
+
+    private var isMessagesReadable: Bool {
+        let path = FileManager.default.homeDirectoryForCurrentUser
+            .appending(path: "Library/Messages/chat.db").path
+        return FileManager.default.isReadableFile(atPath: path)
     }
 
     private var generalContent: some View {

@@ -3,6 +3,7 @@ import SwiftUI
 struct CategoryTabs: View {
     @Binding var selection: SearchCategory
     var counts: [SearchCategory: Int]
+    @Binding var timeRange: SearchCoordinator.TimeRange
 
     var body: some View {
         HStack(spacing: 4) {
@@ -16,30 +17,44 @@ struct CategoryTabs: View {
 
             Spacer(minLength: Tokens.Space.xs)
 
-            Menu {
-                Section("Time range") {
-                    Button("Today")        { Log.info("filter: today",        category: "search") }
-                    Button("This week")    { Log.info("filter: this-week",    category: "search") }
-                    Button("This month")   { Log.info("filter: this-month",   category: "search") }
-                    Button("All time")     { Log.info("filter: all-time",     category: "search") }
-                }
-                Section("Sort by") {
-                    Button("Relevance")    { Log.info("sort: relevance", category: "search") }
-                    Button("Most recent")  { Log.info("sort: recent",    category: "search") }
-                    Button("Title (A–Z)")  { Log.info("sort: title",     category: "search") }
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Text("Filters").font(Tokens.Typeface.bodyEmphasis)
-                    Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold))
-                }
-                .foregroundStyle(Tokens.Color.textSecondary)
-                .padding(.horizontal, Tokens.Space.sm)
-                .padding(.vertical, 6)
+            filterMenu
+        }
+    }
+
+    @ViewBuilder
+    private var filterMenu: some View {
+        Menu {
+            Picker("Time range", selection: $timeRange) {
+                Text("All time").tag(SearchCoordinator.TimeRange.all)
+                Text("Today").tag(SearchCoordinator.TimeRange.today)
+                Text("This week").tag(SearchCoordinator.TimeRange.week)
+                Text("This month").tag(SearchCoordinator.TimeRange.month)
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
+        } label: {
+            HStack(spacing: 4) {
+                Text(label)
+                    .font(Tokens.Typeface.bodyEmphasis)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .bold))
+            }
+            .foregroundStyle(timeRange == .all ? Tokens.Color.textSecondary : Tokens.Color.accent)
+            .padding(.horizontal, Tokens.Space.sm)
+            .padding(.vertical, 6)
+            .background(
+                Capsule().fill(timeRange == .all ? .clear : Tokens.Color.accentSoft)
+            )
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+    }
+
+    private var label: String {
+        switch timeRange {
+        case .all:   return "Filters"
+        case .today: return "Today"
+        case .week:  return "This week"
+        case .month: return "This month"
         }
     }
 }
@@ -61,16 +76,16 @@ private struct CategoryChip: View {
                 .fixedSize(horizontal: true, vertical: false)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 6)
-            .background(
-                Capsule(style: .continuous)
-                    .fill(isSelected ? Tokens.Color.accent :
-                          (hovering ? Color.black.opacity(0.04) : .clear))
-            )
-            .overlay(
-                Capsule(style: .continuous)
-                    .strokeBorder(isSelected ? .clear : Tokens.Color.hairline,
-                                  lineWidth: 0.75)
-            )
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(isSelected ? Tokens.Color.accent :
+                              (hovering ? Color.black.opacity(0.04) : .clear))
+                )
+                .overlay(
+                    Capsule(style: .continuous)
+                        .strokeBorder(isSelected ? .clear : Tokens.Color.hairline,
+                                      lineWidth: 0.75)
+                )
         }
         .buttonStyle(PressableStyle())
         .onHover { hovering = $0 }

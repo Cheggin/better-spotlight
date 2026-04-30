@@ -6,12 +6,25 @@ struct ResultsList: View {
     var onActivate: () -> Void
     var query: String = ""
     var googleSignedIn: Bool = false
+    var category: SearchCategory = .all
+    @EnvironmentObject var preferences: Preferences
 
-    private var topHit: SearchResult? { results.first }
+    private var favorites: [SearchResult] {
+        // Preserve favoriteIDs order.
+        preferences.favoriteIDs.compactMap { id in
+            results.first { $0.id == id }
+        }
+    }
+
+    private var topHit: SearchResult? {
+        results.first(where: { !preferences.isFavorite($0.id) })
+    }
 
     private var groupedTail: [(SearchCategory, [SearchResult])] {
-        let tail = Array(results.dropFirst())
-        let cap = 3 // tight idle view — every section above the fold
+        let consumed = Set(favorites.map(\.id) + [topHit?.id].compactMap { $0 })
+        let tail = results.filter { !consumed.contains($0.id) }
+        // No cap when a single category is active — let the user scroll.
+        let cap = (category == .all) ? 3 : Int.max
         return SearchCategory.orderedDisplay.compactMap { cat in
             let inCat = tail.filter { $0.category == cat }.prefix(cap)
             return inCat.isEmpty ? nil : (cat, Array(inCat))
@@ -23,13 +36,32 @@ struct ResultsList: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
                     if results.isEmpty {
-                        EmptyResultsView(query: query, googleSignedIn: googleSignedIn)
+                        EmptyResultsView(query: query,
+                                         googleSignedIn: googleSignedIn,
+                                         category: category)
                             .padding(.top, Tokens.Space.xl)
                     } else {
-                        // TOP HIT — first result rendered as a prominent card.
+                        // FAVORITES — pinned at the top.
+                        if !favorites.isEmpty {
+                            SectionHeader(title: "FAVORITES")
+                                .padding(.top, 2)
+                            ForEach(favorites) { fav in
+                                ResultRow(
+                                    result: fav,
+                                    isSelected: selectedID == fav.id,
+                                    isFavorite: true,
+                                    onTap: { selectedID = fav.id },
+                                    onDoubleTap: onActivate,
+                                    onToggleFavorite: { preferences.toggleFavorite(fav.id) }
+                                )
+                                .id(fav.id)
+                            }
+                        }
+
+                        // TOP HIT — first non-favorite result.
                         if let hit = topHit {
                             SectionHeader(title: "TOP HIT")
-                                .padding(.top, 2)
+                                .padding(.top, favorites.isEmpty ? 2 : 6)
                             TopHitCard(
                                 result: hit,
                                 isSelected: selectedID == hit.id,
@@ -47,8 +79,10 @@ struct ResultsList: View {
                                 ResultRow(
                                     result: result,
                                     isSelected: selectedID == result.id,
+                                    isFavorite: preferences.isFavorite(result.id),
                                     onTap: { selectedID = result.id },
-                                    onDoubleTap: onActivate
+                                    onDoubleTap: onActivate,
+                                    onToggleFavorite: { preferences.toggleFavorite(result.id) }
                                 )
                                 .id(result.id)
                             }
@@ -166,6 +200,8 @@ private struct TopHitCard: View {
         case .calendarEvent: return "Google Calendar"
         case .mail:          return "Gmail"
         case .file:          return "File"
+        case .message:       return "Messages"
+        case .contact:       return "Contacts"
         }
     }
 }
@@ -189,8 +225,10 @@ private struct SectionHeader: View {
 private struct ResultRow: View {
     let result: SearchResult
     let isSelected: Bool
+    var isFavorite: Bool = false
     var onTap: () -> Void
     var onDoubleTap: () -> Void
+    var onToggleFavorite: () -> Void = {}
 
     @State private var hovering = false
 
@@ -214,6 +252,18 @@ private struct ResultRow: View {
             }
 
             Spacer(minLength: 4)
+
+            // Star button — visible on hover or when already favorited.
+            if hovering || isFavorite {
+                Button(action: onToggleFavorite) {
+                    Image(systemName: isFavorite ? "star.fill" : "star")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(isFavorite ? Color.yellow : Tokens.Color.textTertiary)
+                        .frame(width: 18, height: 18)
+                }
+                .buttonStyle(.borderless)
+                .help(isFavorite ? "Unpin from favorites" : "Pin to favorites")
+            }
 
             if let trailing = result.trailingText {
                 Text(trailing)
@@ -302,7 +352,68 @@ struct ResultLeadingIcon: View {
             BrandedImage(name: "google-calendar", size: size)
         case .file(let info):
             FileTypeBadge(info: info, size: size)
+        case .message(let m):
+            ContactAvatar(handle: m.handle, displayName: m.displayName, size: size)
+        case .contact(let c):
+            ContactAvatarFromInfo(contact: c, size: size)
         }
+    }
+}
+
+private struct ContactAvatarFromInfo: View {
+    let contact: ContactInfo
+    let size: CGFloat
+    var body: some View {
+        if let data = contact.imageData, let img = NSImage(data: data) {
+            Image(nsImage: img).resizable().interpolation(.high)
+                .aspectRatio(contentMode: .fill)
+                .frame(width: size, height: size)
+                .clipShape(Circle())
+                .overlay(Circle().strokeBorder(Color.black.opacity(0.06), lineWidth: 0.5))
+        } else {
+            ZStack {
+                Circle().fill(Tokens.Color.contactTint.opacity(0.18))
+                Text(contact.initials)
+                    .font(.system(size: size * 0.36, weight: .semibold))
+                    .foregroundStyle(Tokens.Color.contactTint)
+            }
+            .frame(width: size, height: size)
+        }
+    }
+}
+
+/// Avatar for a Messages row: real contact photo if we have one, otherwise a
+/// pastel circle with initials.
+private struct ContactAvatar: View {
+    let handle: String
+    let displayName: String
+    let size: CGFloat
+
+    var body: some View {
+        if let data = MessagesProvider.imageData(forHandle: handle),
+           let nsImage = NSImage(data: data) {
+            Image(nsImage: nsImage)
+                .resizable()
+                .interpolation(.high)
+                .aspectRatio(contentMode: .fill)
+                .frame(width: size, height: size)
+                .clipShape(Circle())
+                .overlay(Circle().strokeBorder(Color.black.opacity(0.06), lineWidth: 0.5))
+        } else {
+            ZStack {
+                Circle().fill(Tokens.Color.contactTint.opacity(0.18))
+                Text(initials)
+                    .font(.system(size: size * 0.36, weight: .semibold))
+                    .foregroundStyle(Tokens.Color.contactTint)
+            }
+            .frame(width: size, height: size)
+        }
+    }
+
+    private var initials: String {
+        let parts = displayName.split(separator: " ").prefix(2)
+        let i = parts.compactMap { $0.first }.map(String.init).joined()
+        return (i.isEmpty ? String(displayName.prefix(1)) : i).uppercased()
     }
 }
 
@@ -359,10 +470,11 @@ enum BundledIcon {
 struct EmptyResultsView: View {
     var query: String = ""
     var googleSignedIn: Bool = false
+    var category: SearchCategory = .all
 
     var body: some View {
         VStack(spacing: Tokens.Space.sm) {
-            Image(systemName: query.isEmpty ? "sparkles" : "questionmark.circle")
+            Image(systemName: iconName)
                 .font(.system(size: 28, weight: .light))
                 .foregroundStyle(Tokens.Color.textTertiary)
             Text(headline)
@@ -377,16 +489,52 @@ struct EmptyResultsView: View {
         .frame(maxWidth: .infinity)
     }
 
+    private var iconName: String {
+        if !query.isEmpty { return "magnifyingglass" }
+        switch category {
+        case .calendar: return "calendar"
+        case .mail:     return "tray"
+        case .files:    return "doc"
+        case .folders:  return "folder"
+        default:        return "sparkles"
+        }
+    }
+
     private var headline: String {
-        query.isEmpty ? "Nothing here yet" : "No results for \u{201C}\(query)\u{201D}"
+        if !query.isEmpty {
+            return "No results for \u{201C}\(query)\u{201D}"
+        }
+        // Empty query — message depends on which tab is active.
+        switch category {
+        case .calendar:
+            return googleSignedIn ? "No upcoming events" : "Connect Google Calendar"
+        case .mail:
+            return googleSignedIn ? "Inbox is clear" : "Connect Gmail"
+        case .folders:    return "No matching folders"
+        case .files:      return "No matching files"
+        case .messages:   return "No recent messages"
+        case .contacts:   return googleSignedIn ? "No contacts" : "No contacts"
+        case .all:        return "Type to search"
+        }
     }
 
     private var detail: String {
-        if googleSignedIn {
-            return query.isEmpty
-                ? "Sign in via Settings, then start typing."
-                : "Try a different keyword, or check the spelling."
+        if !query.isEmpty {
+            return "Try a different keyword, or check the spelling."
         }
-        return "Open Settings → Google → Sign in to see Gmail and Calendar results."
+        switch category {
+        case .calendar, .mail:
+            return googleSignedIn
+                ? "Nothing here yet. New items will appear automatically."
+                : "Open Settings → Google → Sign in to load your data."
+        case .folders, .files:
+            return "Open Settings → Folders to add more search locations."
+        case .messages:
+            return "Grant Full Disk Access in Settings to read your iMessages."
+        case .contacts:
+            return "Grant Contacts access when prompted, or in System Settings → Privacy & Security → Contacts."
+        case .all:
+            return "Search files, mail, and your calendar from anywhere."
+        }
     }
 }

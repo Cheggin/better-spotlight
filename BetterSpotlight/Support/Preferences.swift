@@ -7,11 +7,29 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(searchableFolderBookmarks, forKey: Keys.folders) }
     }
 
+    /// Stable result IDs the user has favorited (e.g. "msg:1234").
+    /// Order matters — first-favorited shows first.
+    @Published var favoriteIDs: [String] {
+        didSet { defaults.set(favoriteIDs, forKey: Keys.favorites) }
+    }
+
     private let defaults = UserDefaults.standard
 
     init() {
         self.searchableFolderBookmarks =
             defaults.array(forKey: Keys.folders) as? [Data] ?? []
+        self.favoriteIDs =
+            defaults.array(forKey: Keys.favorites) as? [String] ?? []
+    }
+
+    func isFavorite(_ id: String) -> Bool { favoriteIDs.contains(id) }
+
+    func toggleFavorite(_ id: String) {
+        if let idx = favoriteIDs.firstIndex(of: id) {
+            favoriteIDs.remove(at: idx)
+        } else {
+            favoriteIDs.append(id)
+        }
     }
 
     /// Resolve bookmarks back to URLs, dropping any that no longer resolve.
@@ -58,5 +76,6 @@ final class Preferences: ObservableObject {
 
     private enum Keys {
         static let folders = "BetterSpotlight.searchableFolders"
+        static let favorites = "BetterSpotlight.favorites"
     }
 }

@@ -10,6 +10,11 @@ final class SearchCoordinator: ObservableObject {
     private var providers: [SearchProvider] = []
     private var task: Task<Void, Never>?
     private var debounce: Task<Void, Never>?
+    private var pollTask: Task<Void, Never>?
+
+    /// Filter applied after providers return.
+    enum TimeRange: String { case today, week, month, all }
+    @Published var timeRange: TimeRange = .all
 
     func attach(googleSession: GoogleSession, preferences: Preferences) {
         guard providers.isEmpty else { return }
@@ -17,6 +22,8 @@ final class SearchCoordinator: ObservableObject {
             FileProvider(preferences: preferences),
             GmailProvider(googleSession: googleSession),
             CalendarProvider(googleSession: googleSession),
+            MessagesProvider(),
+            ContactsProvider(),
         ]
         Log.info("search: attached \(providers.count) providers")
     }
@@ -35,16 +42,70 @@ final class SearchCoordinator: ObservableObject {
     }
 
     func filtered(for category: SearchCategory) -> [SearchResult] {
-        guard category != .all else { return results }
+        let timeFiltered = applyTimeRange(results)
+        guard category != .all else { return timeFiltered }
         switch category {
-        case .files:    return results.filter { $0.category == .files }
-        case .folders:  return results.filter { $0.category == .folders }
-        case .calendar: return results.filter { $0.category == .calendar }
-        case .mail:     return results.filter { $0.category == .mail }
-        case .messages: return results.filter { $0.category == .messages }
-        case .contacts: return results.filter { $0.category == .contacts }
-        case .all:      return results
+        case .files:    return timeFiltered.filter { $0.category == .files }
+        case .folders:  return timeFiltered.filter { $0.category == .folders }
+        case .calendar: return timeFiltered.filter { $0.category == .calendar }
+        case .mail:     return timeFiltered.filter { $0.category == .mail }
+        case .messages: return timeFiltered.filter { $0.category == .messages }
+        case .contacts: return timeFiltered.filter { $0.category == .contacts }
+        case .all:      return timeFiltered
         }
+    }
+
+    /// Pulls a date out of a result for time-range filtering.
+    private func date(for r: SearchResult) -> Date? {
+        switch r.payload {
+        case .calendarEvent(let e): return e.start
+        case .mail(let m):          return m.date
+        case .file(let f):          return f.modified
+        case .message(let m):       return m.date
+        case .contact:              return nil
+        }
+    }
+
+    private func applyTimeRange(_ items: [SearchResult]) -> [SearchResult] {
+        guard timeRange != .all else { return items }
+        let cal = Calendar.current
+        let now = Date()
+        return items.filter { r in
+            guard let d = date(for: r) else { return true }
+            switch timeRange {
+            case .today: return cal.isDateInToday(d)
+            case .week:
+                guard let w = cal.dateInterval(of: .weekOfYear, for: now) else { return true }
+                return w.contains(d)
+            case .month:
+                guard let m = cal.dateInterval(of: .month, for: now) else { return true }
+                return m.contains(d)
+            case .all: return true
+            }
+        }
+    }
+
+    /// Re-runs the last query (for auto-refresh and post-mutation reloads).
+    func refresh() {
+        update(query: lastQuery)
+    }
+
+    /// Starts a 60 s background poll. Stops when `stopPolling()` is called.
+    func startPolling() {
+        stopPolling()
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 60_000_000_000)
+                guard !Task.isCancelled, let self else { break }
+                Log.info("auto-refresh tick", category: "search")
+                await MainActor.run { self.refresh() }
+            }
+        }
+    }
+
+    func stopPolling() {
+        pollTask?.cancel()
+        pollTask = nil
     }
 
     // MARK: - Internal

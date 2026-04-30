@@ -25,6 +25,8 @@ struct BottomActionBar: View {
         case .calendarEvent: return "Open in Calendar"
         case .mail:          return "Open in Gmail"
         case .file:          return "Open"
+        case .message:       return "Open in Messages"
+        case .contact:       return "Open Contact"
         }
     }
 }

@@ -13,6 +13,10 @@ struct DetailPane: View {
                     MailDetailView(message: msg)
                 case .file(let info):
                     FileDetailView(info: info)
+                case .message(let m):
+                    MessageDetailView(message: m)
+                case .contact(let c):
+                    ContactDetailView(contact: c)
                 }
             } else {
                 DetailPlaceholder()

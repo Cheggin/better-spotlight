@@ -72,10 +72,33 @@ enum ResultPayload {
     case file(FileInfo)
     case mail(MailMessage)
     case calendarEvent(CalendarEvent)
+    case message(ChatMessage)
+    case contact(ContactInfo)
 
     var isCalendarEvent: Bool {
         if case .calendarEvent = self { return true }
         return false
+    }
+}
+
+// MARK: - Contact payload
+
+struct ContactInfo: Hashable, Identifiable {
+    let id: String
+    let displayName: String
+    let phoneNumbers: [String]
+    let emails: [String]
+    let imageData: Data?
+    let organization: String?
+
+    var initials: String {
+        let parts = displayName.split(separator: " ").prefix(2)
+        let i = parts.compactMap { $0.first }.map(String.init).joined()
+        return (i.isEmpty ? String(displayName.prefix(1)) : i).uppercased()
+    }
+
+    var primaryHandle: String? {
+        phoneNumbers.first ?? emails.first
     }
 }
 
