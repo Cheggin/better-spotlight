@@ -24,9 +24,12 @@ struct SettingsView: View {
         VStack(spacing: 0) {
             tabbar
             Divider().opacity(0.4)
-            content
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .padding(Tokens.Space.lg)
+            ScrollView {
+                content
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .padding(Tokens.Space.lg)
+            }
+            .scrollIndicators(.visible)
         }
         .frame(width: 560, height: 440)
         .background(Color(red: 0.97, green: 0.97, blue: 0.98))
@@ -111,11 +114,11 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: Tokens.Space.md) {
             SectionCard(title: "Activation") {
                 HStack(spacing: Tokens.Space.sm) {
-                    KeyCap(text: "Left ⌘")
-                    Text("+").foregroundStyle(Tokens.Color.textTertiary)
-                    KeyCap(text: "Right ⌘")
+                    KeyCap(text: "⌥")
+                    KeyCap(text: "⇧")
+                    KeyCap(text: "Space")
                 }
-                Text("Press both Command keys at the same time to toggle Better Spotlight.")
+                Text("Press Option-Shift-Space to toggle Better Spotlight.")
                     .font(.system(size: 12))
                     .foregroundStyle(Tokens.Color.textSecondary)
             }
@@ -178,18 +181,11 @@ struct SettingsView: View {
             SectionCard(title: "Searchable folders") {
                 if preferences.searchableFolderURLs.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Using defaults — add a custom folder to override.")
+                        Text("Using default folders — add custom folders to override.")
                             .font(.system(size: 12))
                             .foregroundStyle(Tokens.Color.textTertiary)
                         ForEach(preferences.effectiveSearchRoots, id: \.self) { url in
-                            HStack(spacing: 6) {
-                                Image(systemName: "folder")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(Tokens.Color.folderTint)
-                                Text(displayPath(url))
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(Tokens.Color.textPrimary)
-                            }
+                            searchRootRow(url)
                         }
                     }
                 } else {
@@ -197,11 +193,17 @@ struct SettingsView: View {
                         ForEach(Array(preferences.searchableFolderURLs.enumerated()), id: \.offset) { idx, url in
                             HStack(spacing: Tokens.Space.sm) {
                                 Image(systemName: "folder.fill").foregroundStyle(Tokens.Color.folderTint)
-                                Text(url.path)
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(Tokens.Color.textPrimary)
-                                    .truncationMode(.middle)
-                                    .lineLimit(1)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(url.path)
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(Tokens.Color.textPrimary)
+                                        .truncationMode(.middle)
+                                        .lineLimit(1)
+                                    Text(searchRootStatus(url))
+                                        .font(.system(size: 10))
+                                        .foregroundStyle(searchRootStatusColor(url))
+                                        .lineLimit(1)
+                                }
                                 Spacer()
                                 Button("Remove") { preferences.removeFolder(at: idx) }
                                     .buttonStyle(.borderless)
@@ -216,7 +218,7 @@ struct SettingsView: View {
                 Button { pickFolder() } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "plus.circle.fill")
-                        Text("Add folder…")
+                        Text("Add folders…")
                     }
                     .font(.system(size: 13, weight: .medium))
                 }
@@ -234,13 +236,43 @@ struct SettingsView: View {
         return p.hasPrefix(home) ? "~" + String(p.dropFirst(home.count)) : p
     }
 
+    private func searchRootRow(_ url: URL) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "folder")
+                .font(.system(size: 11))
+                .foregroundStyle(Tokens.Color.folderTint)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(displayPath(url))
+                    .font(.system(size: 12))
+                    .foregroundStyle(Tokens.Color.textPrimary)
+                Text(searchRootStatus(url))
+                    .font(.system(size: 10))
+                    .foregroundStyle(searchRootStatusColor(url))
+            }
+            Spacer()
+        }
+    }
+
+    private func searchRootStatus(_ url: URL) -> String {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+              isDirectory.boolValue
+        else { return "Missing" }
+        return FileManager.default.isReadableFile(atPath: url.path) ? "Readable" : "Not readable"
+    }
+
+    private func searchRootStatusColor(_ url: URL) -> Color {
+        searchRootStatus(url) == "Readable" ? Tokens.Color.textTertiary : .red
+    }
+
     private func pickFolder() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
+        panel.allowsMultipleSelection = true
         panel.prompt = "Add to search"
-        if panel.runModal() == .OK, let url = panel.url { preferences.addFolder(url) }
+        panel.message = "Choose one or more folders for Better Spotlight to search."
+        if panel.runModal() == .OK { preferences.addFolders(panel.urls) }
     }
 
     @ViewBuilder

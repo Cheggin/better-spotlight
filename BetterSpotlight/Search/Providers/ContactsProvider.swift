@@ -74,7 +74,6 @@ final class ContactsProvider: SearchProvider {
             CNContactPhoneNumbersKey, CNContactEmailAddressesKey,
             CNContactThumbnailImageDataKey, CNContactIdentifierKey,
             CNContactBirthdayKey, CNContactPostalAddressesKey,
-            CNContactNoteKey,
         ].map { $0 as CNKeyDescriptor }
         let req = CNContactFetchRequest(keysToFetch: keys)
         var out: [ContactInfo] = []
@@ -99,7 +98,7 @@ final class ContactsProvider: SearchProvider {
                     birthday: contact.birthday,
                     jobTitle: contact.jobTitle.isEmpty ? nil : contact.jobTitle,
                     addresses: addresses,
-                    note: contact.note.isEmpty ? nil : contact.note
+                    note: nil
                 ))
             }
         } catch {

@@ -1,5 +1,9 @@
 import Foundation
 
+private final class MetadataObserverBox: @unchecked Sendable {
+    var observer: NSObjectProtocol?
+}
+
 /// Uses NSMetadataQuery (Spotlight) scoped to user-configured folders.
 final class FileProvider: NSObject, SearchProvider {
     let category: SearchCategory = .files
@@ -11,6 +15,7 @@ final class FileProvider: NSObject, SearchProvider {
     func search(query rawQuery: String) async throws -> [SearchResult] {
         let q = rawQuery.trimmingCharacters(in: .whitespaces)
         let urls = preferences.effectiveSearchRoots
+        let rootResults = urls.compactMap { Self.makeRootResult(url: $0, query: q) }
         Log.info("file query=\(q) scopes=\(urls.count)", category: "files")
         return try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.main.async {
@@ -26,8 +31,8 @@ final class FileProvider: NSObject, SearchProvider {
                     NSSortDescriptor(key: NSMetadataItemFSContentChangeDateKey, ascending: false)
                 ]
 
-                var observer: NSObjectProtocol?
-                observer = NotificationCenter.default.addObserver(
+                let observerBox = MetadataObserverBox()
+                observerBox.observer = NotificationCenter.default.addObserver(
                     forName: .NSMetadataQueryDidFinishGathering,
                     object: mq,
                     queue: .main
@@ -64,15 +69,22 @@ final class FileProvider: NSObject, SearchProvider {
                             )
                         }
                     }
+                    let combined = Self.dedup(rootResults + scored)
                     mq.stop()
-                    if let o = observer { NotificationCenter.default.removeObserver(o) }
-                    Log.info("file got \(scored.count)", category: "files")
-                    continuation.resume(returning: Array(scored.prefix(15)))
+                    if let observer = observerBox.observer {
+                        NotificationCenter.default.removeObserver(observer)
+                        observerBox.observer = nil
+                    }
+                    Log.info("file got \(combined.count)", category: "files")
+                    continuation.resume(returning: Array(combined.prefix(20)))
                 }
                 self.query = mq
                 if !mq.start() {
-                    if let o = observer { NotificationCenter.default.removeObserver(o) }
-                    continuation.resume(returning: [])
+                    if let observer = observerBox.observer {
+                        NotificationCenter.default.removeObserver(observer)
+                        observerBox.observer = nil
+                    }
+                    continuation.resume(returning: Array(rootResults.prefix(20)))
                 }
             }
         }
@@ -83,6 +95,53 @@ final class FileProvider: NSObject, SearchProvider {
             self?.query?.stop()
             self?.query = nil
         }
+    }
+
+    nonisolated private static func makeRootResult(url: URL, query: String) -> SearchResult? {
+        let standardized = url.standardizedFileURL
+        let title = standardized.lastPathComponent.isEmpty
+            ? standardized.path
+            : standardized.lastPathComponent
+        if !query.isEmpty {
+            let haystack = "\(title) \(standardized.path)".lowercased()
+            guard haystack.contains(query.lowercased()) else { return nil }
+        }
+        let values = try? standardized.resourceValues(forKeys: [
+            .contentModificationDateKey,
+            .localizedTypeDescriptionKey,
+        ])
+        let info = FileInfo(
+            url: standardized,
+            isDirectory: true,
+            sizeBytes: nil,
+            modified: values?.contentModificationDate,
+            kind: values?.localizedTypeDescription ?? "Folder"
+        )
+        let modifiedShort: String? = info.modified.map { date in
+            let f = RelativeDateTimeFormatter()
+            f.unitsStyle = .short
+            return f.localizedString(for: date, relativeTo: Date())
+        }
+        return SearchResult(
+            id: "file:\(standardized.path)",
+            title: title,
+            subtitle: info.parentPathDisplay,
+            trailingText: modifiedShort,
+            iconName: info.iconName,
+            category: .folders,
+            payload: .file(info),
+            score: query.isEmpty ? 1.0 : 0.9
+        )
+    }
+
+    nonisolated private static func dedup(_ results: [SearchResult]) -> [SearchResult] {
+        var seen = Set<SearchResult.ID>()
+        var out: [SearchResult] = []
+        for result in results where !seen.contains(result.id) {
+            seen.insert(result.id)
+            out.append(result)
+        }
+        return out
     }
 
     nonisolated private static func makeResult(item: NSMetadataItem, query: String) -> SearchResult? {

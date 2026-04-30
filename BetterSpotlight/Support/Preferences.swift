@@ -37,7 +37,7 @@ final class Preferences: ObservableObject {
         searchableFolderBookmarks.compactMap { data in
             var stale = false
             let url = try? URL(resolvingBookmarkData: data,
-                               options: [.withoutUI],
+                               options: [.withoutUI, .withSecurityScope],
                                relativeTo: nil,
                                bookmarkDataIsStale: &stale)
             return url
@@ -61,12 +61,24 @@ final class Preferences: ObservableObject {
     }
 
     func addFolder(_ url: URL) {
-        guard let bookmark = try? url.bookmarkData(
-            options: [],
-            includingResourceValuesForKeys: nil,
-            relativeTo: nil
-        ) else { return }
-        searchableFolderBookmarks.append(bookmark)
+        addFolders([url])
+    }
+
+    func addFolders(_ urls: [URL]) {
+        var existingPaths = Set(searchableFolderURLs.map { $0.standardizedFileURL.path })
+        var next = searchableFolderBookmarks
+        for url in urls {
+            let standardized = url.standardizedFileURL
+            guard !existingPaths.contains(standardized.path) else { continue }
+            guard let bookmark = try? standardized.bookmarkData(
+                options: [.withSecurityScope, .securityScopeAllowOnlyReadAccess],
+                includingResourceValuesForKeys: nil,
+                relativeTo: nil
+            ) else { continue }
+            next.append(bookmark)
+            existingPaths.insert(standardized.path)
+        }
+        searchableFolderBookmarks = next
     }
 
     func removeFolder(at index: Int) {
