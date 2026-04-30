@@ -418,11 +418,6 @@ struct ContactRecentInteractionsPane: View {
 struct ContactDetailFromMessage: View {
     let message: ChatMessage
 
-    @State private var replyText = ""
-    @State private var sending = false
-    @State private var sendError: String?
-    @State private var sentFlash = false
-
     private var contact: ContactInfo? {
         ContactsProvider.contact(forHandle: message.handle)
     }
@@ -452,8 +447,6 @@ struct ContactDetailFromMessage: View {
                 }
 
                 if let c = contact { contactDetailsCard(c) }
-
-                replyBox
 
                 Spacer(minLength: 0)
             }
@@ -529,107 +522,6 @@ struct ContactDetailFromMessage: View {
             return f.string(from: date)
         }
         return nil
-    }
-
-    // MARK: - Reply box
-
-    @ViewBuilder
-    private var replyBox: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("REPLY")
-                .font(Tokens.Typeface.micro)
-                .tracking(0.7)
-                .foregroundStyle(Tokens.Color.textTertiary)
-
-            HStack(alignment: .bottom, spacing: 8) {
-                TextField("iMessage \(contact?.displayName.split(separator: " ").first.map(String.init) ?? message.displayName)…",
-                          text: $replyText, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .lineLimit(1...4)
-                    .font(.system(size: 13))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(Color.white)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .strokeBorder(Tokens.Color.hairline, lineWidth: 0.5)
-                    )
-                    .onSubmit { send() }
-
-                Button(action: send) {
-                    Image(systemName: sending ? "ellipsis" : "arrow.up")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 32, height: 32)
-                        .background(
-                            Circle().fill(canSend ? Tokens.Color.accent
-                                                  : Tokens.Color.accent.opacity(0.4))
-                        )
-                }
-                .buttonStyle(PressableStyle())
-                .disabled(!canSend)
-            }
-
-            HStack {
-                if sentFlash {
-                    Label("Sent", systemImage: "checkmark.circle.fill")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.green)
-                }
-                if let err = sendError {
-                    Text(err)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.red)
-                        .lineLimit(2)
-                }
-                Spacer()
-                Button {
-                    let recipient = message.handle.addingPercentEncoding(
-                        withAllowedCharacters: .urlPathAllowed) ?? message.handle
-                    if let url = URL(string: "sms:\(recipient)") {
-                        NSWorkspace.shared.open(url)
-                    }
-                } label: {
-                    Text("Open in Messages")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Tokens.Color.accent)
-                }
-                .buttonStyle(.borderless)
-            }
-        }
-    }
-
-    private var canSend: Bool {
-        !sending && !replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private func send() {
-        guard canSend else { return }
-        let body = replyText
-        sending = true
-        sendError = nil
-        Task {
-            do {
-                try await MessagesSender.send(text: body, toHandle: message.handle)
-                await MainActor.run {
-                    replyText = ""
-                    sentFlash = true
-                    sending = false
-                    Task {
-                        try? await Task.sleep(nanoseconds: 1_500_000_000)
-                        sentFlash = false
-                    }
-                }
-            } catch {
-                await MainActor.run {
-                    sendError = error.localizedDescription
-                    sending = false
-                }
-            }
-        }
     }
 
     // MARK: - Avatar

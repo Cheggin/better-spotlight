@@ -20,6 +20,10 @@ struct MessagesThreadView: View {
                     .padding(.vertical, Tokens.Space.sm)
                 Divider().opacity(0.45)
                 threadView(for: m)
+                Divider().opacity(0.45)
+                MessagesReplyBox(message: m)
+                    .padding(.horizontal, Tokens.Space.md)
+                    .padding(.vertical, Tokens.Space.sm)
             } else {
                 placeholder
             }
@@ -141,6 +145,122 @@ struct MessagesThreadView: View {
             thread = []
         }
         isLoading = false
+    }
+}
+
+// MARK: - Reply box
+
+struct MessagesReplyBox: View {
+    let message: ChatMessage
+
+    @State private var replyText = ""
+    @State private var sending = false
+    @State private var sendError: String?
+    @State private var sentFlash = false
+
+    private var contact: ContactInfo? {
+        ContactsProvider.contact(forHandle: message.handle)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .bottom, spacing: 8) {
+                TextField("iMessage \(contact?.displayName.split(separator: " ").first.map(String.init) ?? message.displayName)…",
+                          text: $replyText, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .lineLimit(1...4)
+                    .font(.system(size: 13))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(Color.white)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .strokeBorder(Tokens.Color.hairline, lineWidth: 0.5)
+                    )
+                    .onSubmit { send() }
+
+                Button(action: send) {
+                    Image(systemName: sending ? "ellipsis" : "arrow.up")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 32, height: 32)
+                        .background(
+                            Circle().fill(canSend ? Tokens.Color.accent
+                                                  : Tokens.Color.accent.opacity(0.4))
+                        )
+                }
+                .buttonStyle(PressableStyle())
+                .disabled(!canSend)
+            }
+
+            HStack(spacing: 8) {
+                if sentFlash {
+                    Label("Sent", systemImage: "checkmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.green)
+                }
+                if let err = sendError {
+                    Text(err)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.red)
+                        .lineLimit(2)
+                    if err.contains("Automation") || err.contains("Privacy") {
+                        Button("Open Settings") {
+                            MessagesSender.openAutomationSettings()
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Tokens.Color.accent)
+                    }
+                }
+                Spacer()
+                Button {
+                    let recipient = message.handle.addingPercentEncoding(
+                        withAllowedCharacters: .urlPathAllowed) ?? message.handle
+                    if let url = URL(string: "sms:\(recipient)") {
+                        NSWorkspace.shared.open(url)
+                    }
+                } label: {
+                    Text("Open in Messages")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Tokens.Color.accent)
+                }
+                .buttonStyle(.borderless)
+            }
+        }
+    }
+
+    private var canSend: Bool {
+        !sending && !replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func send() {
+        guard canSend else { return }
+        let body = replyText
+        sending = true
+        sendError = nil
+        Task {
+            do {
+                try await MessagesSender.send(text: body, toHandle: message.handle)
+                await MainActor.run {
+                    replyText = ""
+                    sentFlash = true
+                    sending = false
+                    Task {
+                        try? await Task.sleep(nanoseconds: 1_500_000_000)
+                        sentFlash = false
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    sendError = error.localizedDescription
+                    sending = false
+                }
+            }
+        }
     }
 }
 
