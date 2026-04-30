@@ -60,10 +60,17 @@ private struct MailRow: View {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(Tokens.Color.textPrimary)
                     .lineLimit(1)
-                Text(message.snippet)
+                Text(message.bodyPreview.isEmpty ? message.snippet : message.bodyPreview)
                     .font(.system(size: 11))
                     .foregroundStyle(Tokens.Color.textTertiary)
                     .lineLimit(2)
+                if !message.attachments.isEmpty {
+                    Label("\(message.attachments.count) attachment\(message.attachments.count == 1 ? "" : "s")",
+                          systemImage: "paperclip")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(Tokens.Color.mailTint)
+                        .lineLimit(1)
+                }
             }
         }
         .padding(Tokens.Space.sm)

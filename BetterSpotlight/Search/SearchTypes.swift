@@ -162,9 +162,12 @@ struct MailMessage: Hashable {
     let id: String
     let subject: String
     let snippet: String
+    let bodyPreview: String
+    let htmlBody: String?
     let fromName: String
     let fromEmail: String
     let date: Date
+    let attachments: [MailAttachment]
 
     var fromInitials: String {
         let parts = fromName.split(separator: " ").prefix(2)
@@ -176,6 +179,20 @@ struct MailMessage: Hashable {
         let f = RelativeDateTimeFormatter()
         f.unitsStyle = .short
         return f.localizedString(for: date, relativeTo: Date())
+    }
+}
+
+struct MailAttachment: Hashable {
+    let filename: String
+    let mimeType: String
+    let sizeBytes: Int
+
+    var displaySize: String {
+        guard sizeBytes > 0 else { return "" }
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useKB, .useMB, .useGB]
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: Int64(sizeBytes))
     }
 }
 
@@ -222,4 +239,3 @@ struct CalendarEvent: Hashable {
         return "\(f.string(from: start)) – \(f.string(from: end))"
     }
 }
-

@@ -89,13 +89,30 @@ struct RootView: View {
 
     @ViewBuilder
     private var mainContent: some View {
-        // Calendar is the only tab that takes the full window — the month
-        // grid needs the room and event details surface as a floating
-        // popover instead. Every other tab keeps the three-pane layout
-        // with tab-specific center and right panes.
+        // Calendar is full-window. Mail gets a wider two-pane layout so
+        // rendered HTML email has enough room. Other tabs keep the three-pane
+        // layout with tab-specific center and right panes.
         if category == .calendar {
             centerPane
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if category == .mail {
+            HStack(spacing: 0) {
+                ResultsList(
+                    results: visibleResults,
+                    selectedID: $selectedID,
+                    onActivate: openSelected,
+                    query: query,
+                    googleSignedIn: googleSession.isSignedIn,
+                    category: category
+                )
+                .environmentObject(preferences)
+                .frame(width: 340)
+
+                Divider().opacity(0.45)
+
+                centerPane
+                    .frame(maxWidth: .infinity)
+            }
         } else {
             HStack(spacing: 0) {
                 ResultsList(

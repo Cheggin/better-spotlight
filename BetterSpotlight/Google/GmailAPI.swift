@@ -25,7 +25,9 @@ struct GmailAPI {
         }
         Log.info("gmail list: \(messages.count) ids", category: "mail")
 
-        // 2. Fetch each message in parallel (metadata only).
+        // 2. Fetch each message in parallel. `format=full` gives us enough MIME
+        // structure to build a readable preview and list attachment metadata
+        // without downloading attachment bytes.
         return try await withThrowingTaskGroup(of: MailMessage?.self) { group in
             for entry in messages {
                 guard let id = entry["id"] as? String else { continue }
@@ -42,15 +44,11 @@ struct GmailAPI {
 
     private func fetchMessage(id: String, token: String) async throws -> MailMessage? {
         var comps = URLComponents(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages/\(id)")!
-        comps.queryItems = [
-            .init(name: "format", value: "metadata"),
-            .init(name: "metadataHeaders", value: "Subject"),
-            .init(name: "metadataHeaders", value: "From"),
-            .init(name: "metadataHeaders", value: "Date"),
-        ]
+        comps.queryItems = [.init(name: "format", value: "full")]
         let json = try await getJSON(url: comps.url!, token: token)
-        let snippet = json["snippet"] as? String ?? ""
-        let headers = ((json["payload"] as? [String: Any])?["headers"] as? [[String: Any]]) ?? []
+        let snippet = Self.cleanText(json["snippet"] as? String ?? "")
+        let payload = (json["payload"] as? [String: Any]) ?? [:]
+        let headers = (payload["headers"] as? [[String: Any]]) ?? []
         var subject = ""
         var fromRaw = ""
         var dateRaw: String?
@@ -65,14 +63,19 @@ struct GmailAPI {
         }
         let (fromName, fromEmail) = parseFrom(fromRaw)
         let date = dateRaw.flatMap(parseRFC822) ?? Date()
+        let extracted = Self.extractPayload(payload)
+        let bodyPreview = extracted.bodyPreview.isEmpty ? snippet : extracted.bodyPreview
 
         return MailMessage(
             id: id,
-            subject: subject,
+            subject: Self.cleanText(subject),
             snippet: snippet,
+            bodyPreview: bodyPreview,
+            htmlBody: extracted.htmlBody,
             fromName: fromName,
             fromEmail: fromEmail,
-            date: date
+            date: date,
+            attachments: extracted.attachments
         )
     }
 
@@ -99,6 +102,206 @@ struct GmailAPI {
             if let d = f.date(from: s) { return d }
         }
         return nil
+    }
+
+    nonisolated private static func extractPayload(_ payload: [String: Any])
+        -> (bodyPreview: String, htmlBody: String?, attachments: [MailAttachment])
+    {
+        var plainChunks: [String] = []
+        var htmlChunks: [String] = []
+        var renderableHTML: String?
+        var attachments: [MailAttachment] = []
+
+        func walk(_ part: [String: Any]) {
+            let mimeType = (part["mimeType"] as? String ?? "").lowercased()
+            let filename = (part["filename"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let body = part["body"] as? [String: Any] ?? [:]
+            let size = body["size"] as? Int ?? 0
+            let attachmentID = body["attachmentId"] as? String
+
+            if !filename.isEmpty {
+                attachments.append(MailAttachment(filename: filename,
+                                                  mimeType: mimeType,
+                                                  sizeBytes: size))
+            } else if attachmentID != nil, !mimeType.hasPrefix("text/") {
+                attachments.append(MailAttachment(filename: mimeType.isEmpty ? "Attachment" : mimeType,
+                                                  mimeType: mimeType,
+                                                  sizeBytes: size))
+            }
+
+            if filename.isEmpty, let encoded = body["data"] as? String,
+               let decoded = decodeBase64URL(encoded) {
+                if mimeType == "text/plain" {
+                    plainChunks.append(normalizePreviewText(decoded))
+                } else if mimeType == "text/html" {
+                    if renderableHTML == nil {
+                        renderableHTML = makeRenderableHTML(decoded)
+                    }
+                    htmlChunks.append(normalizePreviewText(stripHTML(decoded)))
+                }
+            }
+
+            for child in part["parts"] as? [[String: Any]] ?? [] {
+                walk(child)
+            }
+        }
+
+        walk(payload)
+        let plainBody = plainChunks.joined(separator: "\n\n")
+        let htmlBody = htmlChunks.joined(separator: "\n\n")
+        let rawBody = choosePreviewBody(plain: plainBody, html: htmlBody)
+        return (String(cleanText(rawBody).prefix(1_200)), renderableHTML, attachments)
+    }
+
+    nonisolated private static func decodeBase64URL(_ value: String) -> String? {
+        var base64 = value
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        while base64.count % 4 != 0 { base64.append("=") }
+        guard let data = Data(base64Encoded: base64) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    nonisolated private static func stripHTML(_ html: String) -> String {
+        var text = html
+        text = text.replacingOccurrences(of: "(?is)<(script|style)[^>]*>.*?</\\1>",
+                                         with: " ",
+                                         options: .regularExpression)
+        text = text.replacingOccurrences(of: "(?i)<br\\s*/?>|</p>|</div>|</li>",
+                                         with: "\n",
+                                         options: .regularExpression)
+        text = text.replacingOccurrences(of: "(?s)<[^>]+>",
+                                         with: " ",
+                                         options: .regularExpression)
+        return text
+    }
+
+    nonisolated private static func makeRenderableHTML(_ html: String) -> String {
+        let sanitized = html.replacingOccurrences(of: "(?is)<script[^>]*>.*?</script>",
+                                                  with: " ",
+                                                  options: .regularExpression)
+        let baseStyle = """
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+        html, body {
+          margin: 0;
+          padding: 0;
+          background: #ffffff;
+          color: #171a23;
+          max-width: 100%;
+          overflow-wrap: anywhere;
+          -webkit-text-size-adjust: 100%;
+        }
+        body {
+          font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+          font-size: 14px;
+          line-height: 1.45;
+        }
+        img, table, video {
+          max-width: 100% !important;
+          height: auto !important;
+        }
+        table {
+          width: auto !important;
+        }
+        a {
+          color: #2563eb;
+        }
+        </style>
+        """
+
+        if sanitized.range(of: "<html", options: .caseInsensitive) != nil {
+            if let headEnd = sanitized.range(of: "</head>", options: .caseInsensitive) {
+                var output = sanitized
+                output.insert(contentsOf: baseStyle, at: headEnd.lowerBound)
+                return output
+            }
+            return baseStyle + sanitized
+        }
+
+        return """
+        <!doctype html>
+        <html>
+        <head>\(baseStyle)</head>
+        <body>\(sanitized)</body>
+        </html>
+        """
+    }
+
+    nonisolated private static func choosePreviewBody(plain: String, html: String) -> String {
+        guard !plain.isEmpty else { return html }
+        guard !html.isEmpty else { return plain }
+
+        let plainScore = previewNoiseScore(plain)
+        let htmlScore = previewNoiseScore(html)
+        if htmlScore + 2 < plainScore { return html }
+        if plain.count > html.count * 2, plainScore > htmlScore { return html }
+        return plain
+    }
+
+    nonisolated private static func previewNoiseScore(_ value: String) -> Int {
+        let lower = value.lowercased()
+        var score = 0
+        score += lower.components(separatedBy: "http://").count - 1
+        score += lower.components(separatedBy: "https://").count - 1
+        score += lower.components(separatedBy: "ablink.").count * 2 - 2
+        score += lower.components(separatedBy: "utm_").count - 1
+        score += lower.components(separatedBy: "%").count / 4
+        score += lower.components(separatedBy: "-2f").count - 1
+        score += lower.components(separatedBy: "-3d").count - 1
+        return max(score, 0)
+    }
+
+    nonisolated private static func normalizePreviewText(_ value: String) -> String {
+        let decoded = decodeHTMLEntities(value)
+        let withoutURLs = decoded.replacingOccurrences(
+            of: #"\s*\(?https?://\S+\)?"#,
+            with: " ",
+            options: .regularExpression
+        )
+        return cleanText(withoutURLs)
+    }
+
+    nonisolated private static func cleanText(_ value: String) -> String {
+        decodeHTMLEntities(value)
+            .replacingOccurrences(of: "\u{00a0}", with: " ")
+            .replacingOccurrences(of: "[ \\t\\r\\n]+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    nonisolated private static func decodeHTMLEntities(_ value: String) -> String {
+        var output = value
+        let named = [
+            "&amp;": "&",
+            "&lt;": "<",
+            "&gt;": ">",
+            "&quot;": "\"",
+            "&apos;": "'",
+            "&nbsp;": " ",
+        ]
+        for (entity, replacement) in named {
+            output = output.replacingOccurrences(of: entity, with: replacement)
+        }
+
+        let pattern = #"&#(x?[0-9A-Fa-f]+);"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return output }
+        let nsRange = NSRange(output.startIndex..<output.endIndex, in: output)
+        let matches = regex.matches(in: output, range: nsRange).reversed()
+        for match in matches {
+            guard match.numberOfRanges == 2,
+                  let fullRange = Range(match.range(at: 0), in: output),
+                  let valueRange = Range(match.range(at: 1), in: output)
+            else { continue }
+
+            let token = String(output[valueRange])
+            let radix = token.lowercased().hasPrefix("x") ? 16 : 10
+            let digits = radix == 16 ? String(token.dropFirst()) : token
+            guard let scalarValue = UInt32(digits, radix: radix),
+                  let scalar = UnicodeScalar(scalarValue)
+            else { continue }
+            output.replaceSubrange(fullRange, with: String(Character(scalar)))
+        }
+        return output
     }
 
     private func getJSON(url: URL, token: String) async throws -> [String: Any] {

@@ -17,10 +17,14 @@ final class GmailProvider: SearchProvider {
         return messages.map { msg in
             let score = q.isEmpty ? 0.55
                 : (FuzzyMatcher.score(query: q, candidate: msg.subject) ?? 0.30)
+            let preview = msg.bodyPreview.isEmpty ? msg.snippet : msg.bodyPreview
+            let attachmentText = msg.attachments.isEmpty
+                ? ""
+                : " · \(msg.attachments.count) attachment\(msg.attachments.count == 1 ? "" : "s")"
             return SearchResult(
                 id: "mail:\(msg.id)",
                 title: msg.subject.isEmpty ? "(no subject)" : msg.subject,
-                subtitle: "\(msg.fromName) · \(msg.snippet.prefix(80))",
+                subtitle: "\(msg.fromName) · \(preview.prefix(80))\(attachmentText)",
                 trailingText: msg.relativeDate,
                 iconName: "envelope.fill",
                 category: .mail,
