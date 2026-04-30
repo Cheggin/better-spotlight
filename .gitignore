@@ -24,3 +24,6 @@ BetterSpotlight/Secrets.swift
 .harness/
 .omc/
 .omx/
+
+# Distribution artifacts (built by task package)
+dist/
