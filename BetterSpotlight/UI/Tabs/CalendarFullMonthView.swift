@@ -5,12 +5,18 @@ import SwiftUI
 /// colored by a per-event hash. Pills are buttons; clicking selects the
 /// event in the right detail pane. Clicking empty space in a cell opens
 /// the EventComposer seeded for that day.
+enum CalendarViewMode: String, CaseIterable {
+    case day, week, month
+    var title: String { rawValue.capitalized }
+}
+
 struct CalendarFullMonthView: View {
     @Binding var selectedDate: Date
     let allEvents: [CalendarEvent]
     var onSelectEvent: (CalendarEvent) -> Void
     var onCreateEvent: (Date) -> Void
 
+    @State private var mode: CalendarViewMode = .month
     @State private var monthAnchor: Date = Calendar.current.startOfDay(for: Date())
 
     private var calendar: Calendar { Calendar.current }
@@ -23,28 +29,72 @@ struct CalendarFullMonthView: View {
                 .padding(.top, Tokens.Space.md)
                 .padding(.bottom, Tokens.Space.xs)
 
-            weekdayRow
-                .padding(.horizontal, Tokens.Space.md)
-
-            grid
+            switch mode {
+            case .month:
+                weekdayRow.padding(.horizontal, Tokens.Space.md)
+                grid
+                    .padding(.horizontal, Tokens.Space.md)
+                    .padding(.bottom, Tokens.Space.md)
+            case .week:
+                WeekTimeline(
+                    weekStart: startOfWeek(for: selectedDate),
+                    allEvents: allEvents,
+                    onSelectEvent: onSelectEvent,
+                    onCreateEvent: onCreateEvent
+                )
                 .padding(.horizontal, Tokens.Space.md)
                 .padding(.bottom, Tokens.Space.md)
+            case .day:
+                DayTimelineFull(
+                    date: selectedDate,
+                    allEvents: allEvents,
+                    onSelectEvent: onSelectEvent,
+                    onCreateEvent: onCreateEvent
+                )
+                .padding(.horizontal, Tokens.Space.md)
+                .padding(.bottom, Tokens.Space.md)
+            }
         }
+    }
+
+    private var calendar2: Calendar { Calendar.current }
+    private func startOfWeek(for date: Date) -> Date {
+        let weekday = calendar.component(.weekday, from: date)
+        let offset = -(weekday - calendar.firstWeekday)
+        return calendar.date(byAdding: .day, value: offset, to: calendar.startOfDay(for: date)) ?? date
     }
 
     // MARK: - Header
 
     private var header: some View {
         HStack(spacing: Tokens.Space.sm) {
-            Text(monthLabel)
+            Text(headerLabel)
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(Tokens.Color.textPrimary)
 
             Spacer()
 
+            // Day / Week / Month switcher
+            HStack(spacing: 0) {
+                ForEach(CalendarViewMode.allCases, id: \.self) { m in
+                    Button { mode = m } label: {
+                        Text(m.title)
+                            .font(.system(size: 12, weight: mode == m ? .semibold : .medium))
+                            .foregroundStyle(mode == m ? .white : Tokens.Color.textSecondary)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 5)
+                            .background(
+                                Capsule().fill(mode == m ? Tokens.Color.accent : .clear)
+                            )
+                    }
+                    .buttonStyle(PressableStyle())
+                }
+            }
+            .background(Capsule().fill(Tokens.Color.surfaceSunken))
+
             HStack(spacing: 6) {
-                NavButton(icon: "chevron.left") { shiftMonth(-1) }
-                NavButton(icon: "chevron.right") { shiftMonth(1) }
+                NavButton(icon: "chevron.left") { shift(-1) }
+                NavButton(icon: "chevron.right") { shift(1) }
             }
 
             Button {
@@ -63,10 +113,35 @@ struct CalendarFullMonthView: View {
         }
     }
 
-    private var monthLabel: String {
+    private var headerLabel: String {
         let f = DateFormatter()
-        f.dateFormat = "MMMM yyyy"
-        return f.string(from: monthAnchor)
+        switch mode {
+        case .month:
+            f.dateFormat = "MMMM yyyy"
+            return f.string(from: monthAnchor)
+        case .week:
+            let start = startOfWeek(for: selectedDate)
+            let end = calendar.date(byAdding: .day, value: 6, to: start) ?? start
+            f.dateFormat = "MMM d"
+            return "\(f.string(from: start)) – \(f.string(from: end))"
+        case .day:
+            f.dateFormat = "EEEE, MMMM d"
+            return f.string(from: selectedDate)
+        }
+    }
+
+    private func shift(_ delta: Int) {
+        switch mode {
+        case .month: shiftMonth(delta)
+        case .week:
+            if let d = calendar.date(byAdding: .day, value: 7 * delta, to: selectedDate) {
+                selectedDate = calendar.startOfDay(for: d)
+            }
+        case .day:
+            if let d = calendar.date(byAdding: .day, value: delta, to: selectedDate) {
+                selectedDate = calendar.startOfDay(for: d)
+            }
+        }
     }
 
     // MARK: - Weekday header
@@ -184,6 +259,247 @@ struct CalendarFullMonthView: View {
         if let d = calendar.date(byAdding: .month, value: delta, to: monthAnchor) {
             monthAnchor = d
         }
+    }
+}
+
+// MARK: - Week + Day timelines (Google-style hourly grid)
+
+private struct WeekTimeline: View {
+    let weekStart: Date
+    let allEvents: [CalendarEvent]
+    let onSelectEvent: (CalendarEvent) -> Void
+    let onCreateEvent: (Date) -> Void
+
+    private let cal = Calendar.current
+    private let firstHour = 7
+    private let lastHour = 22
+    private let hourHeight: CGFloat = 40
+
+    private var days: [Date] {
+        (0..<7).compactMap { cal.date(byAdding: .day, value: $0, to: weekStart) }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                Spacer().frame(width: 56)
+                ForEach(days, id: \.self) { d in
+                    VStack(spacing: 2) {
+                        Text(weekdayShort(d))
+                            .font(.system(size: 10, weight: .semibold))
+                            .tracking(0.6)
+                            .foregroundStyle(Tokens.Color.textTertiary)
+                        Text("\(cal.component(.day, from: d))")
+                            .font(.system(size: 18, weight: cal.isDateInToday(d) ? .semibold : .regular))
+                            .foregroundStyle(cal.isDateInToday(d) ? .white : Tokens.Color.textPrimary)
+                            .frame(width: 28, height: 28)
+                            .background(
+                                Circle().fill(cal.isDateInToday(d) ? Tokens.Color.accent : .clear)
+                            )
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 4)
+                }
+            }
+            Divider().opacity(0.45)
+
+            ScrollView {
+                HStack(alignment: .top, spacing: 0) {
+                    HourLabelsColumn(firstHour: firstHour, lastHour: lastHour, hourHeight: hourHeight)
+                        .frame(width: 56)
+                    ForEach(days, id: \.self) { d in
+                        DayColumn(
+                            date: d,
+                            events: events(on: d),
+                            firstHour: firstHour,
+                            lastHour: lastHour,
+                            hourHeight: hourHeight,
+                            onCreateAt: { onCreateEvent($0) },
+                            onSelect: onSelectEvent
+                        )
+                        .frame(maxWidth: .infinity)
+                        .overlay(
+                            Rectangle()
+                                .frame(width: 0.5)
+                                .foregroundStyle(Tokens.Color.hairline),
+                            alignment: .leading
+                        )
+                    }
+                }
+            }
+            .scrollIndicators(.hidden)
+        }
+    }
+
+    private func events(on day: Date) -> [CalendarEvent] {
+        allEvents.filter { cal.isDate($0.start, inSameDayAs: day) }
+    }
+    private func weekdayShort(_ d: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "EEE"
+        return f.string(from: d).uppercased()
+    }
+}
+
+private struct DayTimelineFull: View {
+    let date: Date
+    let allEvents: [CalendarEvent]
+    let onSelectEvent: (CalendarEvent) -> Void
+    let onCreateEvent: (Date) -> Void
+
+    private let cal = Calendar.current
+    private let firstHour = 7
+    private let lastHour = 22
+    private let hourHeight: CGFloat = 48
+
+    var body: some View {
+        ScrollView {
+            HStack(alignment: .top, spacing: 0) {
+                HourLabelsColumn(firstHour: firstHour, lastHour: lastHour, hourHeight: hourHeight)
+                    .frame(width: 64)
+                DayColumn(
+                    date: date,
+                    events: events(),
+                    firstHour: firstHour,
+                    lastHour: lastHour,
+                    hourHeight: hourHeight,
+                    onCreateAt: onCreateEvent,
+                    onSelect: onSelectEvent
+                )
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .scrollIndicators(.hidden)
+    }
+    private func events() -> [CalendarEvent] {
+        allEvents.filter { cal.isDate($0.start, inSameDayAs: date) }
+    }
+}
+
+private struct HourLabelsColumn: View {
+    let firstHour: Int
+    let lastHour: Int
+    let hourHeight: CGFloat
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(firstHour..<lastHour, id: \.self) { h in
+                Text(label(h))
+                    .font(.system(size: 10, weight: .medium))
+                    .monospacedDigit()
+                    .foregroundStyle(Tokens.Color.textTertiary)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .padding(.trailing, 4)
+                    .frame(height: hourHeight, alignment: .top)
+                    .offset(y: -5)
+            }
+        }
+    }
+    private func label(_ h: Int) -> String {
+        let h12 = h % 12 == 0 ? 12 : h % 12
+        return "\(h12)\(h < 12 ? "a" : "p")"
+    }
+}
+
+private struct DayColumn: View {
+    let date: Date
+    let events: [CalendarEvent]
+    let firstHour: Int
+    let lastHour: Int
+    let hourHeight: CGFloat
+    let onCreateAt: (Date) -> Void
+    let onSelect: (CalendarEvent) -> Void
+
+    private let cal = Calendar.current
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            VStack(spacing: 0) {
+                ForEach(firstHour..<lastHour, id: \.self) { h in
+                    Rectangle()
+                        .fill(Color.clear)
+                        .frame(height: hourHeight)
+                        .overlay(
+                            Rectangle()
+                                .fill(Tokens.Color.hairline)
+                                .frame(height: 0.5),
+                            alignment: .top
+                        )
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            var comps = cal.dateComponents([.year, .month, .day], from: date)
+                            comps.hour = h
+                            comps.minute = 0
+                            if let d = cal.date(from: comps) { onCreateAt(d) }
+                        }
+                }
+            }
+            ForEach(events, id: \.id) { event in
+                EventChip(event: event,
+                          firstHour: firstHour,
+                          hourHeight: hourHeight,
+                          onTap: { onSelect(event) })
+            }
+        }
+    }
+}
+
+private struct EventChip: View {
+    let event: CalendarEvent
+    let firstHour: Int
+    let hourHeight: CGFloat
+    let onTap: () -> Void
+
+    var body: some View {
+        let (offsetY, height) = layout()
+        Button(action: onTap) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(label)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+                Spacer(minLength: 0)
+            }
+            .padding(4)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .frame(height: max(height, 18), alignment: .top)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(tint)
+            )
+        }
+        .buttonStyle(PressableStyle())
+        .padding(.horizontal, 2)
+        .offset(y: offsetY)
+    }
+
+    private var label: String {
+        let cal = Calendar.current
+        let h = cal.component(.hour, from: event.start)
+        let m = cal.component(.minute, from: event.start)
+        let h12 = h % 12 == 0 ? 12 : h % 12
+        let suffix = h < 12 ? "am" : "pm"
+        let timeStr = m == 0 ? "\(h12)\(suffix)" : String(format: "%d:%02d%@", h12, m, suffix)
+        return "\(timeStr) \(event.title)"
+    }
+
+    private var tint: Color {
+        let palette: [Color] = [
+            Color(red: 0.30, green: 0.46, blue: 0.97),
+            Color(red: 0.95, green: 0.43, blue: 0.32),
+            Color(red: 0.32, green: 0.71, blue: 0.55),
+            Color(red: 0.92, green: 0.69, blue: 0.27),
+            Color(red: 0.61, green: 0.43, blue: 0.94),
+        ]
+        return palette[abs(event.title.hashValue) % palette.count]
+    }
+
+    private func layout() -> (CGFloat, CGFloat) {
+        let cal = Calendar.current
+        let startHour = Double(cal.component(.hour, from: event.start))
+            + Double(cal.component(.minute, from: event.start)) / 60
+        let dur = max(0.5, event.end.timeIntervalSince(event.start) / 3600)
+        return (CGFloat((startHour - Double(firstHour)) * Double(hourHeight)),
+                CGFloat(dur * Double(hourHeight) - 1))
     }
 }
 

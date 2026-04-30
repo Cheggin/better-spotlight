@@ -14,9 +14,9 @@ final class MessagesProvider: SearchProvider {
 
     private let store = CNContactStore()
     /// Handle (normalized phone or lowercased email) → display name
-    private static var contactCache: [String: String] = [:]
+    nonisolated(unsafe) private static var contactCache: [String: String] = [:]
     /// Handle → contact thumbnail image data
-    static var contactImageCache: [String: Data] = [:]
+    nonisolated(unsafe) static var contactImageCache: [String: Data] = [:]
 
     func search(query rawQuery: String) async throws -> [SearchResult] {
         let q = rawQuery.trimmingCharacters(in: .whitespaces)
@@ -113,19 +113,90 @@ final class MessagesProvider: SearchProvider {
     }
 
     /// Public accessor for UI rendering (ResultsList icon + MessageDetailView).
-    static func imageData(forHandle handle: String) -> Data? {
+    nonisolated static func imageData(forHandle handle: String) -> Data? {
         if let exact = contactImageCache[handle] { return exact }
         let key = handle.contains("@") ? handle.lowercased() : normalizePhone(handle)
         return contactImageCache[key]
     }
 
-    private static func normalizePhone(_ raw: String) -> String {
+    /// Resolve a raw handle to its display name (or pretty-format if unknown).
+    nonisolated static func name(forHandle handle: String) -> String {
+        if let exact = contactCache[handle] { return exact }
+        let key = handle.contains("@") ? handle.lowercased() : normalizePhone(handle)
+        return contactCache[key] ?? prettyHandle(handle)
+    }
+
+    /// Fetch the full conversation thread for a single handle, newest last.
+    /// Used by the Messages tab to render a full chat scrollback.
+    nonisolated static func fetchThread(forHandle handle: String, max: Int = 200) throws -> [ChatMessage] {
+        let dbURL = FileManager.default.homeDirectoryForCurrentUser
+            .appending(path: "Library/Messages/chat.db")
+        guard FileManager.default.isReadableFile(atPath: dbURL.path) else {
+            throw MessagesError.fullDiskAccessRequired
+        }
+
+        let escaped = handle
+            .replacingOccurrences(of: "'", with: "''")
+        let appleEpoch = TimeInterval(978_307_200)
+
+        let sql = """
+        SELECT m.ROWID, m.text, m.date, m.is_from_me, COALESCE(h.id, '') AS handle
+        FROM message m
+        LEFT JOIN handle h ON h.ROWID = m.handle_id
+        WHERE m.text IS NOT NULL AND m.text != ''
+          AND h.id = '\(escaped)'
+        ORDER BY m.date DESC
+        LIMIT \(max);
+        """
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        process.arguments = ["-readonly", "-separator", "\u{1F}", "-newline", "\u{1E}",
+                             dbURL.path, sql]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = Pipe()
+        try process.run()
+        process.waitUntilExit()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        guard process.terminationStatus == 0 else {
+            throw MessagesError.sqliteFailed("exit \(process.terminationStatus)")
+        }
+
+        let raw = String(data: data, encoding: .utf8) ?? ""
+        let displayName = name(forHandle: handle)
+        var out: [ChatMessage] = []
+        for record in raw.split(separator: "\u{1E}", omittingEmptySubsequences: true) {
+            let cols = record.split(separator: "\u{1F}", maxSplits: 4,
+                                    omittingEmptySubsequences: false)
+            guard cols.count == 5,
+                  let rowID = Int(cols[0]),
+                  let dateNS = Double(cols[2])
+            else { continue }
+            let text = String(cols[1])
+            let isFromMe = (Int(cols[3]) ?? 0) == 1
+            let h = String(cols[4])
+            let seconds = dateNS > 1_000_000_000_000 ? dateNS / 1_000_000_000 : dateNS
+            let date = Date(timeIntervalSince1970: appleEpoch + seconds)
+            out.append(ChatMessage(
+                id: String(rowID),
+                displayName: displayName,
+                handle: h,
+                text: text,
+                date: date,
+                isFromMe: isFromMe
+            ))
+        }
+        return out.reversed() // chronological
+    }
+
+    nonisolated private static func normalizePhone(_ raw: String) -> String {
         let digits = raw.filter { $0.isNumber }
         // Last 10 digits is good enough for US matching iMessage's normalization.
         return digits.count > 10 ? String(digits.suffix(10)) : digits
     }
 
-    private static func prettyHandle(_ handle: String) -> String {
+    nonisolated private static func prettyHandle(_ handle: String) -> String {
         if handle.contains("@") { return handle }
         let digits = handle.filter { $0.isNumber }
         guard digits.count >= 10 else { return handle }

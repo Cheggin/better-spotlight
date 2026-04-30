@@ -56,6 +56,11 @@ struct RootView: View {
                 )
                 .environmentObject(googleSession)
                 .transition(.scale.combined(with: .opacity))
+            } else if category != .all, let result = selectedResult,
+                      let id = selectedID, !id.isEmpty {
+                // Popover detail card layered above the full-window tab content.
+                FloatingDetailCard(result: result) { selectedID = nil }
+                    .transition(.scale.combined(with: .opacity))
             }
         }
         .animation(.easeOut(duration: 0.18), value: composerStart)
@@ -78,28 +83,35 @@ struct RootView: View {
 
     @ViewBuilder
     private var mainContent: some View {
-        // Always 3-pane: results | calendar (month + day timeline) | event editor
-        HStack(spacing: 0) {
-            ResultsList(
-                results: visibleResults,
-                selectedID: $selectedID,
-                onActivate: openSelected,
-                query: query,
-                googleSignedIn: googleSession.isSignedIn,
-                category: category
-            )
-            .environmentObject(preferences)
-            .frame(width: 340)
+        // The "All" tab keeps its three-pane Spotlight-style layout. Every
+        // other tab takes the full window — clicking a row pops up a
+        // floating detail card overlay instead of using a fixed right rail.
+        if category == .all {
+            HStack(spacing: 0) {
+                ResultsList(
+                    results: visibleResults,
+                    selectedID: $selectedID,
+                    onActivate: openSelected,
+                    query: query,
+                    googleSignedIn: googleSession.isSignedIn,
+                    category: category
+                )
+                .environmentObject(preferences)
+                .frame(width: 340)
 
-            Divider().opacity(0.45)
+                Divider().opacity(0.45)
 
+                centerPane
+                    .frame(maxWidth: .infinity)
+
+                Divider().opacity(0.45)
+
+                DetailPane(result: selectedResult)
+                    .frame(width: 360)
+            }
+        } else {
             centerPane
-                .frame(maxWidth: .infinity)
-
-            Divider().opacity(0.45)
-
-            DetailPane(result: selectedResult)
-                .frame(width: 360)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -115,10 +127,9 @@ struct RootView: View {
                 onSelectEvent: { selectedID = "event:\($0.id)" },
                 onCreateEvent: { composerStart = $0 }
             )
+        case .messages:
+            MessagesThreadView(message: selectedMessage)
         default:
-            // For non-calendar tabs, keep the simpler month + day timeline so
-            // the user always has calendar context. Per-tab center views will
-            // replace this in subsequent commits.
             CalendarPane(
                 selectedDate: $selectedDate,
                 eventsOnDate: eventsOnSelectedDate,
@@ -127,6 +138,11 @@ struct RootView: View {
                 onCreateEvent: { composerStart = $0 }
             )
         }
+    }
+
+    private var selectedMessage: ChatMessage? {
+        if let r = selectedResult, case .message(let m) = r.payload { return m }
+        return nil
     }
 
     private var visibleResults: [SearchResult] {
