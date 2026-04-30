@@ -29,6 +29,11 @@ tasks:
       - pkill -f "{{.SCHEME}}.app/Contents/MacOS" 2>/dev/null; sleep 0.3; true
       - open "{{.APP_PATH}}"
 
+  show:
+    desc: Open the spotlight panel (works without the dual-cmd hotkey).
+    cmds:
+      - open "betterspotlight://show"
+
   lint:
     desc: Typecheck every Swift source against the macOS SDK.
     cmds:
@@ -56,6 +61,21 @@ tasks:
     desc: Stream file-provider (NSMetadataQuery) logs.
     cmds:
       - log stream --predicate 'subsystem == "{{.SUBSYSTEM}}" AND category == "files"' --info --debug --style compact
+
+  logs:messages:
+    desc: Stream Messages provider + chat.db / Contacts auth logs.
+    cmds:
+      - log stream --predicate 'subsystem == "{{.SUBSYSTEM}}" AND category == "messages"' --info --debug --style compact
+
+  logs:contacts:
+    desc: Stream Contacts provider logs.
+    cmds:
+      - log stream --predicate 'subsystem == "{{.SUBSYSTEM}}" AND category == "contacts"' --info --debug --style compact
+
+  logs:mail:
+    desc: Stream Gmail API + provider logs.
+    cmds:
+      - log stream --predicate 'subsystem == "{{.SUBSYSTEM}}" AND category == "mail"' --info --debug --style compact
 
   package:
     desc: Build Release, package as DMG in dist/.

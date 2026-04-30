@@ -58,6 +58,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkey?.stop()
     }
 
+    /// betterspotlight://show or betterspotlight://toggle — opens the panel.
+    /// Used by `task show` so the popup can be triggered from the terminal.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls where url.scheme == "betterspotlight" {
+            switch url.host {
+            case "show":   panelController.show()
+            case "toggle": panelController.toggle()
+            case "hide":   panelController.hide()
+            default:       panelController.toggle()
+            }
+        }
+    }
+
     private func buildStatusMenu() -> NSMenu {
         let menu = NSMenu()
         menu.addItem(withTitle: "Open Better Spotlight",

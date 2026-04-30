@@ -44,6 +44,10 @@ targets:
         NSAppleEventsUsageDescription: Better Spotlight uses Apple Events to open files you select.
         NSCalendarsUsageDescription: Better Spotlight reads your Google Calendar via the Google API; this entitlement is reserved for future native Calendar integration.
         NSContactsUsageDescription: Better Spotlight reads your contacts to show real names and photos for senders in Mail, Messages, and Calendar.
+        CFBundleURLTypes:
+          - CFBundleURLName: com.reagan.betterspotlight.url
+            CFBundleURLSchemes:
+              - betterspotlight
     entitlements:
       path: BetterSpotlight/Resources/BetterSpotlight.entitlements
       properties:
