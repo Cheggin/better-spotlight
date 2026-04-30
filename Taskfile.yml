@@ -56,3 +56,63 @@ tasks:
     desc: Stream file-provider (NSMetadataQuery) logs.
     cmds:
       - log stream --predicate 'subsystem == "{{.SUBSYSTEM}}" AND category == "files"' --info --debug --style compact
+
+  package:
+    desc: Build Release, package as DMG in dist/.
+    vars:
+      RELEASE_APP_PATH: build/Build/Products/Release/BetterSpotlight.app
+    cmds:
+      - |
+        if ! command -v xcodegen >/dev/null; then
+          echo "✗ xcodegen not found. Run: brew install xcodegen"; exit 1
+        fi
+      - xcodegen
+      - |
+        echo "→ Building Release configuration..."
+        if command -v xcbeautify >/dev/null; then PRETTY="xcbeautify"; else PRETTY="cat"; fi
+        set -o pipefail
+        xcodebuild -project {{.PROJECT}} -scheme {{.SCHEME}} \
+          -configuration Release -derivedDataPath build \
+          CODE_SIGNING_ALLOWED=NO build | $PRETTY
+      - |
+        VERSION=$(defaults read "$(pwd)/{{.RELEASE_APP_PATH}}/Contents/Info" CFBundleShortVersionString 2>/dev/null || echo "0.1.0")
+        DMG_NAME="BetterSpotlight-${VERSION}.dmg"
+        STAGING_DIR="$(mktemp -d)/DMGStaging"
+        mkdir -p dist "$STAGING_DIR"
+
+        echo "→ Staging app for DMG (version ${VERSION})..."
+        cp -R "{{.RELEASE_APP_PATH}}" "$STAGING_DIR/BetterSpotlight.app"
+        ln -s /Applications "$STAGING_DIR/Applications"
+
+        TEMP_DMG_BASE="/tmp/BetterSpotlight-staging-$$"
+
+        echo "→ Creating DMG..."
+        if command -v create-dmg >/dev/null; then
+          create-dmg \
+            --volname "BetterSpotlight" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 128 \
+            --icon "BetterSpotlight.app" 150 185 \
+            --icon "Applications" 450 185 \
+            --hide-extension "BetterSpotlight.app" \
+            --app-drop-link 450 185 \
+            "dist/${DMG_NAME}" \
+            "$STAGING_DIR"
+        else
+          echo "  (create-dmg not found; using hdiutil — install create-dmg for a nicer layout)"
+          # hdiutil appends .dmg automatically; use a base path without extension
+          rm -f "${TEMP_DMG_BASE}.dmg"
+          hdiutil create -srcfolder "$STAGING_DIR" \
+            -volname "BetterSpotlight" \
+            -fs HFS+ \
+            -format UDRW \
+            "$TEMP_DMG_BASE"
+
+          hdiutil convert "${TEMP_DMG_BASE}.dmg" -format UDZO -imagekey zlib-level=9 -o "dist/${DMG_NAME}"
+          rm -f "${TEMP_DMG_BASE}.dmg"
+        fi
+
+        rm -rf "$(dirname "$STAGING_DIR")"
+        echo "✓ DMG created: dist/${DMG_NAME}"
+        ls -lh "dist/${DMG_NAME}"
