@@ -1,0 +1,34 @@
+import Foundation
+
+final class GmailProvider: SearchProvider {
+    let category: SearchCategory = .mail
+    private let googleSession: GoogleSession
+    private var task: Task<Void, Never>?
+
+    init(googleSession: GoogleSession) { self.googleSession = googleSession }
+
+    func search(query rawQuery: String) async throws -> [SearchResult] {
+        guard googleSession.isSignedIn else {
+            Log.info("gmail provider skipped — not signed in", category: "mail")
+            return []
+        }
+        let q = rawQuery.trimmingCharacters(in: .whitespaces)
+        let messages = try await GmailAPI(session: googleSession).search(query: q, max: 10)
+        return messages.map { msg in
+            let score = q.isEmpty ? 0.55
+                : (FuzzyMatcher.score(query: q, candidate: msg.subject) ?? 0.30)
+            return SearchResult(
+                id: "mail:\(msg.id)",
+                title: msg.subject.isEmpty ? "(no subject)" : msg.subject,
+                subtitle: "\(msg.fromName) · \(msg.snippet.prefix(80))",
+                trailingText: msg.relativeDate,
+                iconName: "envelope.fill",
+                category: .mail,
+                payload: .mail(msg),
+                score: score
+            )
+        }
+    }
+
+    func cancel() { task?.cancel(); task = nil }
+}
