@@ -56,9 +56,10 @@ struct RootView: View {
                 )
                 .environmentObject(googleSession)
                 .transition(.scale.combined(with: .opacity))
-            } else if category != .all, let result = selectedResult,
+            } else if category == .calendar, let result = selectedResult,
+                      result.payload.isCalendarEvent,
                       let id = selectedID, !id.isEmpty {
-                // Popover detail card layered above the full-window tab content.
+                // Calendar tab is full-window, so its event detail floats above.
                 FloatingDetailCard(result: result) { selectedID = nil }
                     .transition(.scale.combined(with: .opacity))
             }
@@ -83,10 +84,14 @@ struct RootView: View {
 
     @ViewBuilder
     private var mainContent: some View {
-        // The "All" tab keeps its three-pane Spotlight-style layout. Every
-        // other tab takes the full window — clicking a row pops up a
-        // floating detail card overlay instead of using a fixed right rail.
-        if category == .all {
+        // Calendar is the only tab that takes the full window — the month
+        // grid needs the room and event details surface as a floating
+        // popover instead. Every other tab keeps the three-pane layout
+        // with tab-specific center and right panes.
+        if category == .calendar {
+            centerPane
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
             HStack(spacing: 0) {
                 ResultsList(
                     results: visibleResults,
@@ -106,17 +111,14 @@ struct RootView: View {
 
                 Divider().opacity(0.45)
 
-                DetailPane(result: selectedResult)
+                rightPane
                     .frame(width: 360)
             }
-        } else {
-            centerPane
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
-    /// Center pane content varies by tab. Right pane stays as DetailPane —
-    /// per-tab right panes are layered on later.
+    /// Center pane content. Each tab gets its own center view per
+    /// reagan_plan_per_tab_views.md.
     @ViewBuilder
     private var centerPane: some View {
         switch category {
@@ -130,24 +132,16 @@ struct RootView: View {
         case .messages:
             MessagesThreadView(message: selectedMessage)
         case .mail:
-            MailListView(
-                results: visibleResults,
-                selectedID: $selectedID,
-                onActivate: openSelected
-            )
+            // Mail center: full message body of the selected mail.
+            DetailPane(result: selectedResult)
+                .background(Color(red: 0.97, green: 0.97, blue: 0.98))
         case .files, .folders:
-            FilesGridView(
-                results: visibleResults,
-                selectedID: $selectedID,
-                onActivate: openSelected
-            )
+            FileQuickLookPane(file: selectedFile)
         case .contacts:
-            ContactsGridView(
-                results: visibleResults,
-                selectedID: $selectedID,
-                onActivate: openSelected
-            )
+            ContactEditPane(contact: selectedContact,
+                            googleSession: googleSession)
         default:
+            // All tab — original month + day-timeline center pane.
             CalendarPane(
                 selectedDate: $selectedDate,
                 eventsOnDate: eventsOnSelectedDate,
@@ -156,6 +150,53 @@ struct RootView: View {
                 onCreateEvent: { composerStart = $0 }
             )
         }
+    }
+
+    /// Right pane content. Tab-specific where the plan calls for it.
+    @ViewBuilder
+    private var rightPane: some View {
+        switch category {
+        case .messages:
+            // Right: contact info card for the selected message's sender.
+            if let m = selectedMessage {
+                ContactDetailFromMessage(message: m)
+            } else {
+                DetailPane(result: nil)
+            }
+        case .mail:
+            // Right: sender info card.
+            if let r = selectedResult, case .mail(let m) = r.payload {
+                MailSenderCard(message: m)
+            } else {
+                DetailPane(result: nil)
+            }
+        case .files, .folders:
+            // Right: file metadata.
+            if let info = selectedFile {
+                FileMetadataPane(info: info)
+            } else {
+                DetailPane(result: nil)
+            }
+        case .contacts:
+            // Right: recent interactions feed.
+            if let c = selectedContact {
+                ContactRecentInteractionsPane(contact: c)
+            } else {
+                DetailPane(result: nil)
+            }
+        default:
+            DetailPane(result: selectedResult)
+        }
+    }
+
+    private var selectedFile: FileInfo? {
+        if let r = selectedResult, case .file(let info) = r.payload { return info }
+        return nil
+    }
+
+    private var selectedContact: ContactInfo? {
+        if let r = selectedResult, case .contact(let c) = r.payload { return c }
+        return nil
     }
 
     private var selectedMessage: ChatMessage? {
