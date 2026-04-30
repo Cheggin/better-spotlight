@@ -206,59 +206,24 @@ final class MessagesProvider: SearchProvider {
             throw MessagesError.fullDiskAccessRequired
         }
 
-        let escaped = handle
-            .replacingOccurrences(of: "'", with: "''")
-        let appleEpoch = TimeInterval(978_307_200)
-
-        let sql = """
-        SELECT m.ROWID, m.text, m.date, m.is_from_me, COALESCE(h.id, '') AS handle
-        FROM message m
-        LEFT JOIN handle h ON h.ROWID = m.handle_id
-        WHERE m.text IS NOT NULL AND m.text != ''
-          AND h.id = '\(escaped)'
-        ORDER BY m.date DESC
-        LIMIT \(max);
-        """
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
-        process.arguments = ["-readonly", "-separator", "\u{1F}", "-newline", "\u{1E}",
-                             dbURL.path, sql]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = Pipe()
-        try process.run()
-        process.waitUntilExit()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        guard process.terminationStatus == 0 else {
-            throw MessagesError.sqliteFailed("exit \(process.terminationStatus)")
-        }
-
-        let raw = String(data: data, encoding: .utf8) ?? ""
+        let escaped = ChatDB.escape(handle)
+        let sql = ChatDB.selectSQL(
+            whereClause: "WHERE \(ChatDB.bodyPredicate) AND h.id = '\(escaped)'",
+            limit: max
+        )
+        let rows = try ChatDB.run(sql: sql, dbURL: dbURL)
         let displayName = name(forHandle: handle)
-        var out: [ChatMessage] = []
-        for record in raw.split(separator: "\u{1E}", omittingEmptySubsequences: true) {
-            let cols = record.split(separator: "\u{1F}", maxSplits: 4,
-                                    omittingEmptySubsequences: false)
-            guard cols.count == 5,
-                  let rowID = Int(cols[0]),
-                  let dateNS = Double(cols[2])
-            else { continue }
-            let text = String(cols[1])
-            let isFromMe = (Int(cols[3]) ?? 0) == 1
-            let h = String(cols[4])
-            let seconds = dateNS > 1_000_000_000_000 ? dateNS / 1_000_000_000 : dateNS
-            let date = Date(timeIntervalSince1970: appleEpoch + seconds)
-            out.append(ChatMessage(
-                id: String(rowID),
+        let messages: [ChatMessage] = rows.map {
+            ChatMessage(
+                id: String($0.rowID),
                 displayName: displayName,
-                handle: h,
-                text: text,
-                date: date,
-                isFromMe: isFromMe
-            ))
+                handle: $0.handle,
+                text: $0.text,
+                date: $0.date,
+                isFromMe: $0.isFromMe
+            )
         }
-        return out.reversed() // chronological
+        return messages.reversed() // chronological (oldest → newest)
     }
 
     nonisolated private static func normalizePhone(_ raw: String) -> String {
@@ -280,43 +245,40 @@ final class MessagesProvider: SearchProvider {
 
     // MARK: - SQLite query (via /usr/bin/sqlite3)
 
-    /// chat.db schema: message has ROWID, text, date, is_from_me; handle has
-    /// id (phone/email). We join through chat_message_join → chat → handle.
-    /// `date` is nanoseconds since Apple epoch (2001-01-01).
+    /// Recent messages from chat.db. Used by the Messages tab list view.
+    /// `extraHandles` is OR-merged into the WHERE so a query like "angela"
+    /// can match rows by sender even when the message text doesn't include
+    /// the keyword.
     nonisolated static func fetchMessages(dbURL: URL, query: String,
                                           extraHandles: [String] = [],
                                           max: Int)
         throws -> [RawMessage]
     {
-        let appleEpoch = TimeInterval(978_307_200) // 2001-01-01 UTC
-        let escaped = query
-            .replacingOccurrences(of: "'", with: "''")
-            .replacingOccurrences(of: "\"", with: "\"\"")
+        let whereClause = ChatDB.recentWhereClause(query: query, extraHandles: extraHandles)
+        let sql = ChatDB.selectSQL(whereClause: whereClause, limit: max)
+        return try ChatDB.run(sql: sql, dbURL: dbURL)
+    }
+}
 
-        // We pull `text` AND `attributedBody` (the modern iMessage container).
-        // Both can carry the message body — newer iMessages put plaintext in
-        // attributedBody, an NSKeyedArchiver blob we decode in Swift. We
-        // include the row whenever EITHER column is populated.
-        let whereCore = "(m.text IS NOT NULL AND m.text != '') OR m.attributedBody IS NOT NULL"
-        let whereClause: String
-        if query.isEmpty {
-            whereClause = "WHERE \(whereCore)"
-        } else {
-            // For queries we still LIKE-filter the plain-text column. Rows
-            // whose text lives in attributedBody won't match by text but
-            // can still match by handle (extraHandles → contact-name matches).
-            var conditions = ["m.text LIKE '%\(escaped)%' COLLATE NOCASE"]
-            if !extraHandles.isEmpty {
-                let inList = extraHandles
-                    .map { $0.replacingOccurrences(of: "'", with: "''") }
-                    .map { "'\($0)'" }
-                    .joined(separator: ",")
-                conditions.append("h.id IN (\(inList))")
-            }
-            whereClause = "WHERE (\(whereCore)) AND (\(conditions.joined(separator: " OR ")))"
-        }
+// MARK: - chat.db SQL helpers
 
-        let sql = """
+/// Centralizes everything we know about reading from
+/// `~/Library/Messages/chat.db` via `/usr/bin/sqlite3`. Both the message
+/// list and the per-thread view share the same SELECT and the same
+/// process-spawning logic.
+private enum ChatDB {
+    /// 2001-01-01 UTC — the Apple "Cocoa" epoch chat.db stores its dates in.
+    static let appleEpoch = TimeInterval(978_307_200)
+
+    /// Predicate matching any row that has either a populated plain-text
+    /// column or an attributedBody blob (modern iMessages live in the latter).
+    static let bodyPredicate =
+        "((m.text IS NOT NULL AND m.text != '') OR m.attributedBody IS NOT NULL)"
+
+    /// Builds the SELECT we always use. `whereClause` is inlined verbatim so
+    /// callers can build query-specific constraints.
+    static func selectSQL(whereClause: String, limit: Int) -> String {
+        """
         SELECT m.ROWID, m.text, m.date, m.is_from_me,
                COALESCE(h.id, '') AS handle,
                COALESCE(quote(m.attributedBody), '')
@@ -324,15 +286,46 @@ final class MessagesProvider: SearchProvider {
         LEFT JOIN handle h ON h.ROWID = m.handle_id
         \(whereClause)
         ORDER BY m.date DESC
-        LIMIT \(max);
+        LIMIT \(limit);
         """
+    }
 
+    /// Composes the WHERE for `fetchMessages` — recent messages, optional
+    /// keyword + sender-handle match.
+    static func recentWhereClause(query: String, extraHandles: [String]) -> String {
+        if query.isEmpty {
+            return "WHERE \(bodyPredicate)"
+        }
+        let escaped = escape(query, alsoQuotes: true)
+        var conditions = ["m.text LIKE '%\(escaped)%' COLLATE NOCASE"]
+        if !extraHandles.isEmpty {
+            let inList = extraHandles
+                .map { "'\(escape($0))'" }
+                .joined(separator: ",")
+            conditions.append("h.id IN (\(inList))")
+        }
+        return "WHERE \(bodyPredicate) AND (\(conditions.joined(separator: " OR ")))"
+    }
+
+    /// Single-quote-escape for SQL string literals. With `alsoQuotes`, also
+    /// escapes embedded double-quotes (used inside LIKE patterns).
+    static func escape(_ s: String, alsoQuotes: Bool = false) -> String {
+        var out = s.replacingOccurrences(of: "'", with: "''")
+        if alsoQuotes {
+            out = out.replacingOccurrences(of: "\"", with: "\"\"")
+        }
+        return out
+    }
+
+    /// Runs `sqlite3 -readonly` with our standard separators, drains the
+    /// pipes (mandatory — `waitUntilExit()` deadlocks if stdout overflows
+    /// the ~64KB pipe buffer), and parses the rows into `RawMessage`s.
+    static func run(sql: String, dbURL: URL) throws -> [RawMessage] {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
         process.arguments = ["-readonly", "-separator", "\u{1F}", "-newline", "\u{1E}",
                              dbURL.path, sql]
-        let pipe = Pipe()
-        let errPipe = Pipe()
+        let pipe = Pipe(), errPipe = Pipe()
         process.standardOutput = pipe
         process.standardError = errPipe
         do {
@@ -340,22 +333,27 @@ final class MessagesProvider: SearchProvider {
         } catch {
             throw MessagesError.sqliteFailed(error.localizedDescription)
         }
-        // Drain pipes BEFORE waiting — Process.waitUntilExit() deadlocks
-        // when the child blocks writing to a full stdout pipe (default
-        // pipe buffer is ~64KB, but the 200-row query returns ~120KB).
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
+
         guard process.terminationStatus == 0 else {
             let msg = String(data: errData, encoding: .utf8) ?? "exit \(process.terminationStatus)"
-            // chat.db is unreadable → permission. Bubble up as the dedicated case.
-            if msg.lowercased().contains("authoriz") || msg.lowercased().contains("permission")
-                || msg.lowercased().contains("unable to open") {
+            let lower = msg.lowercased()
+            if lower.contains("authoriz") || lower.contains("permission")
+                || lower.contains("unable to open") {
                 throw MessagesError.fullDiskAccessRequired
             }
             throw MessagesError.sqliteFailed(msg)
         }
 
+        return parse(data: data)
+    }
+
+    /// Splits the sqlite3 output (RS-separated records, US-separated
+    /// fields) into `RawMessage`s, decoding `attributedBody` on rows where
+    /// the plain-text column is empty.
+    private static func parse(data: Data) -> [RawMessage] {
         let raw = String(data: data, encoding: .utf8) ?? ""
         var out: [RawMessage] = []
         for record in raw.split(separator: "\u{1E}", omittingEmptySubsequences: true) {
@@ -369,15 +367,12 @@ final class MessagesProvider: SearchProvider {
             let isFromMe = (Int(cols[3]) ?? 0) == 1
             let handle = String(cols[4])
             let attributedQuoted = String(cols[5])
-            // chat.db stores nanoseconds; older rows used seconds. Detect by magnitude.
             let seconds = dateNS > 1_000_000_000_000 ? dateNS / 1_000_000_000 : dateNS
             let date = Date(timeIntervalSince1970: appleEpoch + seconds)
 
-            // If `text` is empty, decode the attributedBody blob.
             if text.isEmpty, let decoded = decodeAttributedBody(attributedQuoted) {
                 text = decoded
             }
-            // Skip rows that resolved to nothing.
             guard !text.isEmpty else { continue }
 
             out.append(RawMessage(
