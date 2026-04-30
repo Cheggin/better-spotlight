@@ -93,23 +93,39 @@ struct RootView: View {
 
             Divider().opacity(0.45)
 
-            CalendarPane(
-                selectedDate: $selectedDate,
-                eventsOnDate: eventsOnSelectedDate,
-                allEvents: allEvents,
-                onSelectEvent: { event in
-                    selectedID = "event:\(event.id)"
-                },
-                onCreateEvent: { start in
-                    composerStart = start
-                }
-            )
-            .frame(maxWidth: .infinity)
+            centerPane
+                .frame(maxWidth: .infinity)
 
             Divider().opacity(0.45)
 
             DetailPane(result: selectedResult)
                 .frame(width: 360)
+        }
+    }
+
+    /// Center pane content varies by tab. Right pane stays as DetailPane —
+    /// per-tab right panes are layered on later.
+    @ViewBuilder
+    private var centerPane: some View {
+        switch category {
+        case .calendar:
+            CalendarFullMonthView(
+                selectedDate: $selectedDate,
+                allEvents: allEvents,
+                onSelectEvent: { selectedID = "event:\($0.id)" },
+                onCreateEvent: { composerStart = $0 }
+            )
+        default:
+            // For non-calendar tabs, keep the simpler month + day timeline so
+            // the user always has calendar context. Per-tab center views will
+            // replace this in subsequent commits.
+            CalendarPane(
+                selectedDate: $selectedDate,
+                eventsOnDate: eventsOnSelectedDate,
+                allEvents: allEvents,
+                onSelectEvent: { selectedID = "event:\($0.id)" },
+                onCreateEvent: { composerStart = $0 }
+            )
         }
     }
 
