@@ -16,6 +16,7 @@ xcuserdata/
 
 # Secrets — real OAuth credentials live in .env (loaded at runtime)
 .env
+BetterSpotlight/Resources/env.config
 BetterSpotlight/Secrets.swift
 
 # Misc
