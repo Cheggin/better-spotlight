@@ -429,13 +429,8 @@ private struct SkeletonBlock: View {
 
     var body: some View {
         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            .fill(Tokens.Color.textTertiary.opacity(0.14))
+            .fill(Tokens.Color.textPrimary.opacity(0.07))
             .frame(width: width, height: height)
-            .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(Color.white.opacity(0.20))
-                    .blendMode(.plusLighter)
-            )
     }
 }
 
