@@ -493,9 +493,9 @@ struct ContactDetailFromMessage: View {
             if let bday = c.birthday, let label = formatBirthday(bday) {
                 detailRow(icon: "gift.fill", values: [label])
             }
-            if !c.addresses.isEmpty {
-                detailRow(icon: "mappin.and.ellipse",
-                          values: c.addresses.map { $0.replacingOccurrences(of: "\n", with: ", ") })
+            let dedupedAddresses = Self.dedupeAddresses(c.addresses)
+            if !dedupedAddresses.isEmpty {
+                detailRow(icon: "mappin.and.ellipse", values: dedupedAddresses)
             }
             if let note = c.note {
                 detailRow(icon: "note.text", values: [note])
@@ -539,6 +539,26 @@ struct ContactDetailFromMessage: View {
         return nil
     }
 
+    /// Collapses contact addresses that are partial fragments of a fuller
+    /// entry — e.g. drops the bare "United States" entry when another address
+    /// already contains it as a suffix. Multi-line entries are first
+    /// flattened to a single comma-separated string.
+    private static func dedupeAddresses(_ addresses: [String]) -> [String] {
+        let flat = addresses
+            .map { $0.replacingOccurrences(of: "\n", with: ", ")
+                .trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        var result: [String] = []
+        for value in flat {
+            if result.contains(where: { $0.localizedCaseInsensitiveContains(value) }) {
+                continue
+            }
+            result.removeAll { value.localizedCaseInsensitiveContains($0) }
+            result.append(value)
+        }
+        return result
+    }
+
     // MARK: - Avatar
 
     @ViewBuilder
@@ -579,16 +599,18 @@ private struct CopyableValue: View {
                 .font(.system(size: 12))
                 .foregroundStyle(Tokens.Color.textPrimary)
                 .textSelection(.enabled)
-            if hovering || copiedFlash {
-                Button(action: copy) {
-                    Image(systemName: copiedFlash ? "checkmark" : "doc.on.doc")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(copiedFlash ? .green : Tokens.Color.accent)
-                        .frame(width: 16, height: 16)
-                }
-                .buttonStyle(.borderless)
-                .help("Copy")
+            // Reserve space for the copy icon so the row doesn't jump when
+            // hovered.
+            Button(action: copy) {
+                Image(systemName: copiedFlash ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(copiedFlash ? .green : Tokens.Color.accent)
+                    .frame(width: 16, height: 16)
             }
+            .buttonStyle(.borderless)
+            .opacity(hovering || copiedFlash ? 1 : 0)
+            .allowsHitTesting(hovering || copiedFlash)
+            .help("Copy")
             Spacer(minLength: 0)
         }
         .contentShape(Rectangle())
