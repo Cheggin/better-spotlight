@@ -147,7 +147,9 @@ final class SearchCoordinator: ObservableObject {
                      category: "timing")
         }
 
-        var merged = resultsForInactiveCategories(keeping: activeProviders, query: query)
+        var merged = query.isEmpty
+            ? results
+            : resultsForInactiveCategories(keeping: activeProviders, query: query)
         await withTaskGroup(of: (String, [SearchResult], Int).self) { group in
             for provider in activeProviders {
                 let label = provider.category.title
@@ -171,6 +173,7 @@ final class SearchCoordinator: ObservableObject {
                 }
             }
             for await (label, chunk, providerMs) in group {
+                merged.removeAll { self.result($0, belongsToProviderLabel: label) }
                 merged.append(contentsOf: chunk)
                 self.results = self.rank(merged)
                 self.counts = self.countByCategory(self.results)
@@ -232,12 +235,7 @@ final class SearchCoordinator: ObservableObject {
 
             for await (label, chunk, providerMs) in group {
                 guard !Task.isCancelled, lastQuery == query else { return }
-                merged.removeAll { result in
-                    if label == SearchCategory.files.title {
-                        return result.category == .files || result.category == .folders
-                    }
-                    return result.category.title == label
-                }
+                merged.removeAll { self.result($0, belongsToProviderLabel: label) }
                 merged.append(contentsOf: chunk)
                 results = rank(merged)
                 counts = countByCategory(results)
@@ -274,6 +272,13 @@ final class SearchCoordinator: ObservableObject {
             provider.category == .files ? [.files, .folders] : [provider.category]
         })
         return results.filter { activeCategories.contains($0.category) == false }
+    }
+
+    private func result(_ result: SearchResult, belongsToProviderLabel label: String) -> Bool {
+        if label == SearchCategory.files.title {
+            return result.category == .files || result.category == .folders
+        }
+        return result.category.title == label
     }
 
     private func markLoading(_ providers: [SearchProvider], isLoading: Bool) {
