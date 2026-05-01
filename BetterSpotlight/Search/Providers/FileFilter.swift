@@ -125,4 +125,12 @@ enum FileFilter {
         let ext = url.pathExtension.lowercased()
         return !bundleExtensions.contains(ext)
     }
+
+    static func shouldSkipDescendants(of url: URL) -> Bool {
+        let name = url.lastPathComponent
+        if name.hasPrefix(".") && name != "." && name != ".." { return true }
+        if junkDirComponents.contains(name) { return true }
+        let ext = url.pathExtension.lowercased()
+        return !ext.isEmpty && bundleExtensions.contains(ext)
+    }
 }

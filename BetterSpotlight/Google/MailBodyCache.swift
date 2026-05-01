@@ -54,7 +54,7 @@ final class MailBodyCache {
 
     func prefetch(messages: [MailMessage],
                   googleSession: GoogleSession,
-                  limit: Int = 3) {
+                  limit: Int = 2) {
         let candidates = messages
             .filter { $0.htmlBody == nil && fullMessages[$0.id] == nil && inFlight[$0.id] == nil }
             .prefix(limit)
@@ -66,6 +66,7 @@ final class MailBodyCache {
         Log.info("mail body prefetch scheduled count=\(ids.count)", category: "timing")
         prefetchTask = Task { [weak self] in
             guard let self else { return }
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
             for id in ids {
                 if Task.isCancelled { break }
                 do {
@@ -74,6 +75,7 @@ final class MailBodyCache {
                     // Keep prefetch best-effort. Detail selection still retries on demand.
                     continue
                 }
+                try? await Task.sleep(nanoseconds: 250_000_000)
             }
             Log.info("mail body prefetch complete count=\(ids.count)", category: "timing")
         }

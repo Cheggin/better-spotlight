@@ -294,7 +294,7 @@ final class SearchCoordinator: ObservableObject {
         guard !messages.isEmpty else { return }
         MailBodyCache.shared.prefetch(messages: messages,
                                       googleSession: googleSession,
-                                      limit: 3)
+                                      limit: 2)
     }
 
     private func rank(_ items: [SearchResult]) -> [SearchResult] {

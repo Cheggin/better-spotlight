@@ -18,12 +18,18 @@ final class FileProvider: NSObject, SearchProvider {
         let rootResults = urls.compactMap { Self.makeRootResult(url: $0, query: q) }
         Log.info("file query=\(q) scopes=\(urls.count)", category: "files")
         if q.isEmpty {
-            Log.info("file empty query returning roots only count=\(rootResults.count)",
+            let start = Date()
+            let recent = Self.recentFilesystemResults(in: urls)
+            let combined = Self.dedup(rootResults + recent)
+            Log.info("file empty query roots=\(rootResults.count) recent=\(recent.count) combined=\(combined.count)",
+                     category: "files")
+            Log.info("file empty query complete count=\(combined.count) +\(Int(Date().timeIntervalSince(start) * 1_000))ms",
                      category: "timing")
-            return Array(rootResults.prefix(20))
+            return Array(combined.prefix(40))
         }
         return try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.main.async {
+                let accessedURLs = urls.filter { $0.startAccessingSecurityScopedResource() }
                 let mq = NSMetadataQuery()
                 mq.searchScopes = urls
                 mq.predicate = q.isEmpty
@@ -76,6 +82,7 @@ final class FileProvider: NSObject, SearchProvider {
                     }
                     let combined = Self.dedup(rootResults + scored)
                     mq.stop()
+                    accessedURLs.forEach { $0.stopAccessingSecurityScopedResource() }
                     if let observer = observerBox.observer {
                         NotificationCenter.default.removeObserver(observer)
                         observerBox.observer = nil
@@ -89,10 +96,74 @@ final class FileProvider: NSObject, SearchProvider {
                         NotificationCenter.default.removeObserver(observer)
                         observerBox.observer = nil
                     }
+                    accessedURLs.forEach { $0.stopAccessingSecurityScopedResource() }
                     continuation.resume(returning: Array(rootResults.prefix(20)))
                 }
             }
         }
+    }
+
+    nonisolated private static func recentFilesystemResults(in roots: [URL],
+                                                            limit: Int = 60) -> [SearchResult] {
+        let fileManager = FileManager.default
+        let keys: [URLResourceKey] = [
+            .isDirectoryKey,
+            .contentModificationDateKey,
+            .fileSizeKey,
+            .localizedTypeDescriptionKey,
+        ]
+        let cutoff = Date().addingTimeInterval(-30 * 86400)
+        let maxVisited = 20_000
+        var visited = 0
+        var candidates: [SearchResult] = []
+        let accessedURLs = roots.filter { $0.startAccessingSecurityScopedResource() }
+        defer { accessedURLs.forEach { $0.stopAccessingSecurityScopedResource() } }
+
+        for root in roots {
+            guard visited < maxVisited else { break }
+            guard let enumerator = fileManager.enumerator(
+                at: root,
+                includingPropertiesForKeys: keys,
+                options: [.skipsHiddenFiles, .skipsPackageDescendants],
+                errorHandler: { url, error in
+                    Log.warn("file scan skipped \(url.path): \(error.localizedDescription)", category: "files")
+                    return true
+                }
+            ) else { continue }
+
+            while let url = enumerator.nextObject() as? URL {
+                visited += 1
+                if visited > maxVisited { break }
+
+                let values = try? url.resourceValues(forKeys: Set(keys))
+                let isDirectory = values?.isDirectory ?? false
+                if isDirectory, FileFilter.shouldSkipDescendants(of: url) {
+                    enumerator.skipDescendants()
+                    continue
+                }
+
+                guard FileFilter.shouldShow(url, isDirectory: isDirectory) else {
+                    if isDirectory { enumerator.skipDescendants() }
+                    continue
+                }
+
+                if let modified = values?.contentModificationDate, modified < cutoff {
+                    continue
+                }
+
+                guard let result = makeResult(url: url, values: values) else { continue }
+                candidates.append(result)
+                if candidates.count >= limit * 8 { break }
+            }
+        }
+
+        let sorted = candidates.sorted { lhs, rhs in
+            (date(for: lhs) ?? .distantPast) > (date(for: rhs) ?? .distantPast)
+        }
+        let out = Array(sorted.prefix(limit))
+        Log.info("file empty scan visited=\(visited) candidates=\(candidates.count) returned=\(out.count)",
+                 category: "files")
+        return out
     }
 
     func cancel() {
@@ -180,5 +251,36 @@ final class FileProvider: NSObject, SearchProvider {
             payload: .file(info),
             score: 0.5
         )
+    }
+
+    nonisolated private static func makeResult(url: URL,
+                                               values: URLResourceValues?) -> SearchResult? {
+        let fsIsDir = values?.isDirectory ?? false
+        let displayedAsFolder = FileFilter.isDisplayedAsFolder(url: url, fsIsDirectory: fsIsDir)
+        let info = FileInfo(url: url,
+                            isDirectory: displayedAsFolder,
+                            sizeBytes: values?.fileSize.map(Int64.init),
+                            modified: values?.contentModificationDate,
+                            kind: values?.localizedTypeDescription)
+        let modifiedShort: String? = info.modified.map { date in
+            let f = RelativeDateTimeFormatter()
+            f.unitsStyle = .short
+            return f.localizedString(for: date, relativeTo: Date())
+        }
+        return SearchResult(
+            id: "file:\(url.standardizedFileURL.path)",
+            title: url.lastPathComponent,
+            subtitle: info.parentPathDisplay,
+            trailingText: modifiedShort,
+            iconName: info.iconName,
+            category: displayedAsFolder ? .folders : .files,
+            payload: .file(info),
+            score: 0.5
+        )
+    }
+
+    nonisolated private static func date(for result: SearchResult) -> Date? {
+        if case .file(let info) = result.payload { return info.modified }
+        return nil
     }
 }
