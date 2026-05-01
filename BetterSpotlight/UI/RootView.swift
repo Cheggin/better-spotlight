@@ -5,6 +5,7 @@ struct RootView: View {
     @EnvironmentObject var preferences: Preferences
 
     @StateObject private var coordinator = SearchCoordinator()
+    @StateObject private var escapeStack = SpotlightEscapeStack()
     @State private var query: String = ""
     @State private var category: SearchCategory = .all
     @State private var selectedID: SearchResult.ID?
@@ -23,8 +24,7 @@ struct RootView: View {
             CategoryTabs(
                 selection: $category,
                 categories: preferences.tabConfiguration.visibleTabs,
-                counts: coordinator.counts,
-                timeRange: $coordinator.timeRange
+                counts: coordinator.counts
             )
             .padding(.horizontal, Tokens.Space.md)
             .padding(.bottom, Tokens.Space.xs)
@@ -62,6 +62,7 @@ struct RootView: View {
                         coordinator.refresh()
                     }
                 )
+                .environmentObject(escapeStack)
                 .environmentObject(googleSession)
                 .transition(.scale.combined(with: .opacity))
             } else if category == .calendar, showCalendarPopover,
@@ -347,6 +348,9 @@ struct RootView: View {
 
     @discardableResult
     private func handleEscape() -> Bool {
+        if escapeStack.handleEscape() {
+            return true
+        }
         if composerStart != nil {
             composerStart = nil
             return true

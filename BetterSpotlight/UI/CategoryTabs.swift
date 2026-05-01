@@ -4,7 +4,6 @@ struct CategoryTabs: View {
     @Binding var selection: SearchCategory
     var categories: [SearchCategory]
     var counts: [SearchCategory: Int]
-    @Binding var timeRange: SearchCoordinator.TimeRange
 
     var body: some View {
         HStack(spacing: 4) {
@@ -16,48 +15,106 @@ struct CategoryTabs: View {
                     shortcutIndex: idx + 1
                 ) { selection = cat }
             }
+            Spacer(minLength: 0)
+            AccountChip()
+        }
+    }
+}
 
-            Spacer(minLength: Tokens.Space.xs)
+private struct AccountChip: View {
+    @EnvironmentObject var googleSession: GoogleSession
+    @EnvironmentObject var preferences: Preferences
 
-            filterMenu
+    @State private var open = false
+
+    var body: some View {
+        Button { open.toggle() } label: {
+            HStack(spacing: 6) {
+                if let img = BundledIcon.image(named: "google") {
+                    Image(nsImage: img)
+                        .resizable()
+                        .interpolation(.high)
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 14, height: 14)
+                } else {
+                    Image(systemName: "g.circle.fill")
+                        .font(.system(size: 14))
+                        .foregroundStyle(Tokens.Color.accent)
+                }
+                Text(label)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Tokens.Color.textPrimary)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $open, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 0) {
+                if googleSession.isSignedIn,
+                   let email = googleSession.displayEmail {
+                    Text(email)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Tokens.Color.textTertiary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                    Divider()
+                }
+                rowButton("Open Settings", icon: "gearshape") {
+                    open = false
+                    NotificationCenter.default.post(name: .dismissSpotlight, object: nil)
+                    SettingsWindowController.shared.show(
+                        googleSession: googleSession,
+                        preferences: preferences
+                    )
+                }
+                if googleSession.isSignedIn {
+                    Divider()
+                    rowButton("Sign out", icon: "rectangle.portrait.and.arrow.right",
+                              destructive: true) {
+                        open = false
+                        googleSession.signOut()
+                    }
+                } else {
+                    Divider()
+                    rowButton("Sign in with Google", icon: "person.crop.circle.badge.plus") {
+                        open = false
+                        Task { try? await googleSession.signIn() }
+                    }
+                }
+            }
+            .frame(width: 200)
+            .padding(.vertical, 4)
         }
     }
 
-    @ViewBuilder
-    private var filterMenu: some View {
-        Menu {
-            Picker("Time range", selection: $timeRange) {
-                Text("All time").tag(SearchCoordinator.TimeRange.all)
-                Text("Today").tag(SearchCoordinator.TimeRange.today)
-                Text("This week").tag(SearchCoordinator.TimeRange.week)
-                Text("This month").tag(SearchCoordinator.TimeRange.month)
+    private func rowButton(_ title: String, icon: String,
+                           destructive: Bool = false,
+                           action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 11))
+                    .frame(width: 14)
+                Text(title)
+                    .font(.system(size: 12))
+                Spacer()
             }
-        } label: {
-            HStack(spacing: 4) {
-                Text(label)
-                    .font(Tokens.Typeface.bodyEmphasis)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 9, weight: .bold))
-            }
-            .foregroundStyle(timeRange == .all ? Tokens.Color.textSecondary : Tokens.Color.accent)
-            .padding(.horizontal, Tokens.Space.sm)
+            .foregroundStyle(destructive ? .red : Tokens.Color.textPrimary)
+            .padding(.horizontal, 12)
             .padding(.vertical, 6)
-            .background(
-                Capsule().fill(timeRange == .all ? .clear : Tokens.Color.accentSoft)
-            )
+            .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
+        .buttonStyle(.borderless)
     }
 
     private var label: String {
-        switch timeRange {
-        case .all:   return "Filters"
-        case .today: return "Today"
-        case .week:  return "This week"
-        case .month: return "This month"
+        if googleSession.isSignedIn {
+            return googleSession.displayEmail ?? "Account"
         }
+        return "Sign in"
     }
 }
 
