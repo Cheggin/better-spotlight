@@ -37,14 +37,14 @@ struct SearchBar: View {
             Spacer(minLength: Tokens.Space.xs)
 
             HStack(spacing: 6) {
-                ToolbarLineIcon(systemName: "folder", url: nil)
-                ToolbarLineIcon(systemName: "square.stack", url: nil)
-                ToolbarLineIcon(systemName: "calendar",
+                ToolbarLineIcon(systemName: "folder", tooltip: "Files", url: nil)
+                ToolbarLineIcon(systemName: "square.stack", tooltip: "Folders", url: nil)
+                ToolbarLineIcon(systemName: "calendar", tooltip: "Open Google Calendar",
                                 url: URL(string: "https://calendar.google.com/"))
-                ToolbarLineIcon(systemName: "envelope",
+                ToolbarLineIcon(systemName: "envelope", tooltip: "Open Gmail",
                                 url: URL(string: "https://mail.google.com/"))
                 ToolbarSettingsButton()
-                ToolbarLineIcon(systemName: "ellipsis", url: nil)
+                ToolbarLineIcon(systemName: "ellipsis", tooltip: "More", url: nil)
             }
         }
         .padding(.horizontal, Tokens.Space.sm)
@@ -81,8 +81,15 @@ private struct ToolbarSettingsButton: View {
         }
         .buttonStyle(PressableStyle())
         .onHover { hovering = $0 }
-        .help("Settings")
-        .animation(.easeOut(duration: 0.12), value: hovering)
+        .overlay(alignment: .bottom) {
+            if hovering {
+                ToolbarTooltip(text: "Settings")
+                    .offset(y: 22)
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+            }
+        }
+        .animation(.easeOut(duration: 0.25), value: hovering)
     }
 }
 
@@ -90,6 +97,7 @@ private struct ToolbarSettingsButton: View {
 /// Matches the reference: thin hairline outline, monochrome glyph, hover fill.
 private struct ToolbarLineIcon: View {
     let systemName: String
+    var tooltip: String = ""
     let url: URL?
     @State private var hovering = false
 
@@ -111,7 +119,29 @@ private struct ToolbarLineIcon: View {
         }
         .buttonStyle(PressableStyle())
         .onHover { hovering = $0 }
-        .animation(.easeOut(duration: 0.12), value: hovering)
+        .overlay(alignment: .bottom) {
+            if hovering, !tooltip.isEmpty {
+                ToolbarTooltip(text: tooltip)
+                    .offset(y: 22)
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+            }
+        }
+        .animation(.easeOut(duration: 0.25), value: hovering)
+    }
+}
+
+private struct ToolbarTooltip: View {
+    let text: String
+    var body: some View {
+        Text(text)
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(Tokens.Color.textSecondary)
+            .fixedSize()
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(Tokens.Color.surfaceSunken))
+            .overlay(Capsule().strokeBorder(Tokens.Color.hairline, lineWidth: 0.5))
     }
 }
 

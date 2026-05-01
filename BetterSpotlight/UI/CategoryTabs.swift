@@ -8,11 +8,12 @@ struct CategoryTabs: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            ForEach(categories) { cat in
+            ForEach(Array(categories.enumerated()), id: \.element.id) { idx, cat in
                 CategoryChip(
                     category: cat,
                     isSelected: cat == selection,
-                    badge: counts[cat] ?? 0
+                    badge: counts[cat] ?? 0,
+                    shortcutIndex: idx + 1
                 ) { selection = cat }
             }
 
@@ -64,6 +65,7 @@ private struct CategoryChip: View {
     let category: SearchCategory
     let isSelected: Bool
     let badge: Int
+    var shortcutIndex: Int = 0
     let action: () -> Void
 
     @State private var hovering = false
@@ -90,7 +92,43 @@ private struct CategoryChip: View {
         }
         .buttonStyle(PressableStyle())
         .onHover { hovering = $0 }
-        .animation(.easeOut(duration: 0.12), value: hovering)
+        .modifier(NumericShortcut(index: shortcutIndex))
+        .overlay(alignment: .bottom) {
+            if hovering, (1...9).contains(shortcutIndex) {
+                Text("⌘\(shortcutIndex)")
+                    .font(.system(size: 10, weight: .medium))
+                    .monospacedDigit()
+                    .foregroundStyle(Tokens.Color.textSecondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(
+                        Capsule().fill(Tokens.Color.surfaceSunken)
+                    )
+                    .overlay(
+                        Capsule().strokeBorder(Tokens.Color.hairline, lineWidth: 0.5)
+                    )
+                    .offset(y: 20)
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+            }
+        }
+        .animation(.easeOut(duration: 0.25), value: hovering)
         .animation(.easeOut(duration: 0.18), value: isSelected)
+    }
+}
+
+/// ⌘1…⌘9 shortcut, only applied when the index is in range. Higher indices
+/// don't get a shortcut so this also works gracefully if more tabs are added.
+private struct NumericShortcut: ViewModifier {
+    let index: Int
+
+    func body(content: Content) -> some View {
+        if (1...9).contains(index),
+           let scalar = Unicode.Scalar(0x30 + index) {
+            content.keyboardShortcut(KeyEquivalent(Character(scalar)),
+                                     modifiers: .command)
+        } else {
+            content
+        }
     }
 }
