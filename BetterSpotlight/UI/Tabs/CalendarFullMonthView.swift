@@ -188,6 +188,7 @@ struct CalendarFullMonthView: View {
                                 onTapEvent: onSelectEvent
                             )
                             .frame(width: geo.size.width / 7, height: rowHeight)
+                            .clipped()
                             .overlay(
                                 Rectangle()
                                     .stroke(Tokens.Color.hairline, lineWidth: 0.5)
@@ -353,23 +354,43 @@ private struct DayTimelineFull: View {
     private let hourHeight: CGFloat = 48
 
     var body: some View {
-        ScrollView {
-            HStack(alignment: .top, spacing: 0) {
-                HourLabelsColumn(firstHour: firstHour, lastHour: lastHour, hourHeight: hourHeight)
-                    .frame(width: 64)
-                DayColumn(
-                    date: date,
-                    events: events(),
-                    firstHour: firstHour,
-                    lastHour: lastHour,
-                    hourHeight: hourHeight,
-                    onCreateAt: onCreateEvent,
-                    onSelect: onSelectEvent
-                )
-                .frame(maxWidth: .infinity)
+        ScrollViewReader { proxy in
+            ScrollView {
+                HStack(alignment: .top, spacing: 0) {
+                    HourLabelsColumn(firstHour: firstHour, lastHour: lastHour, hourHeight: hourHeight)
+                        .frame(width: 64)
+                    DayColumn(
+                        date: date,
+                        events: events(),
+                        firstHour: firstHour,
+                        lastHour: lastHour,
+                        hourHeight: hourHeight,
+                        onCreateAt: onCreateEvent,
+                        onSelect: onSelectEvent
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+            }
+            .scrollIndicators(.hidden)
+            .onAppear {
+                DispatchQueue.main.async {
+                    proxy.scrollTo(anchorHour(for: date), anchor: .center)
+                }
+            }
+            .onChange(of: date) { _, new in
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    proxy.scrollTo(anchorHour(for: new), anchor: .center)
+                }
             }
         }
-        .scrollIndicators(.hidden)
+    }
+
+    private func anchorHour(for d: Date) -> Int {
+        let c = Calendar.current
+        if c.isDateInToday(d) {
+            return min(max(c.component(.hour, from: Date()), firstHour), lastHour - 1)
+        }
+        return max(firstHour, 9)
     }
     private func events() -> [CalendarEvent] {
         allEvents.filter { cal.isDate($0.start, inSameDayAs: date) }
@@ -431,6 +452,7 @@ private struct DayColumn: View {
                             comps.minute = 0
                             if let d = cal.date(from: comps) { onCreateAt(d) }
                         }
+                        .id(h)
                 }
             }
             ForEach(events, id: \.id) { event in
@@ -438,6 +460,13 @@ private struct DayColumn: View {
                           firstHour: firstHour,
                           hourHeight: hourHeight,
                           onTap: { onSelect(event) })
+            }
+
+            // Red current-time line — only when this column is today.
+            if cal.isDateInToday(date) {
+                NowLine(firstHour: firstHour,
+                        hourHeight: hourHeight,
+                        leadingInset: 0)
             }
         }
     }
@@ -449,25 +478,33 @@ private struct EventChip: View {
     let hourHeight: CGFloat
     let onTap: () -> Void
 
+    @State private var pressed = false
+
     var body: some View {
         let (offsetY, height) = layout()
-        Button(action: onTap) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(label)
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .lineLimit(2)
-                Spacer(minLength: 0)
-            }
-            .padding(4)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-            .frame(height: max(height, 18), alignment: .top)
-            .background(
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(tint)
-            )
+        VStack(alignment: .leading, spacing: 1) {
+            Text(label)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.white)
+                .lineLimit(2)
+            Spacer(minLength: 0)
         }
-        .buttonStyle(PressableStyle())
+        .padding(4)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .frame(height: max(height, 18), alignment: .top)
+        .background(
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(tint)
+        )
+        .scaleEffect(pressed ? 0.96 : 1.0)
+        .animation(.easeOut(duration: 0.12), value: pressed)
+        .contentShape(Rectangle())
+        .onTapGesture { onTap() }
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in pressed = true }
+                .onEnded { _ in pressed = false }
+        )
         .padding(.horizontal, 2)
         .offset(y: offsetY)
     }

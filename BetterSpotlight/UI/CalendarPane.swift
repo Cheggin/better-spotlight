@@ -23,6 +23,7 @@ struct CalendarPane: View {
                 .padding(.bottom, Tokens.Space.xs)
 
             DayTimeline(events: eventsOnDate,
+                        anchorDate: selectedDate,
                         onSelect: onSelectEvent,
                         onCreateAt: { hour in
                             // Combine selected date + clicked hour into a Date.
@@ -75,46 +76,80 @@ private struct DayHeader: View {
 
 private struct DayTimeline: View {
     let events: [CalendarEvent]
+    let anchorDate: Date
     let onSelect: (CalendarEvent) -> Void
     let onCreateAt: (Double) -> Void
 
     private let hourHeight: CGFloat = 44
-    private let firstHour: Int = 8       // 8 AM
-    private let lastHour: Int = 18       // 6 PM (exclusive — show through 5:59)
+    private let firstHour: Int = 0       // 12 AM
+    private let lastHour: Int = 24       // exclusive — show through 11:59 PM
     private let leadingLabelWidth: CGFloat = 44
 
+    /// Hour to anchor the scroll viewport on. For today this is the current
+    /// hour; for any other day, default to 9 AM so the visible window opens
+    /// on the workday.
+    private func anchorHour(for date: Date) -> Int {
+        let cal = Calendar.current
+        if cal.isDateInToday(date) {
+            return cal.component(.hour, from: Date())
+        }
+        return 9
+    }
+
     var body: some View {
-        ScrollView {
-            ZStack(alignment: .topLeading) {
-                // Hour rows — each is a clickable empty slot.
-                VStack(spacing: 0) {
-                    ForEach(firstHour..<lastHour, id: \.self) { hour in
-                        HourSlot(
-                            label: hourLabel(hour),
-                            leadingLabelWidth: leadingLabelWidth,
-                            height: hourHeight,
-                            onTapHalf: { half in
-                                // half = 0.0 (top of hour) or 0.5 (bottom of hour)
-                                onCreateAt(Double(hour) + half)
-                            }
-                        )
+        ScrollViewReader { proxy in
+            ScrollView {
+                ZStack(alignment: .topLeading) {
+                    // Hour rows — each is a clickable empty slot.
+                    VStack(spacing: 0) {
+                        ForEach(firstHour..<lastHour, id: \.self) { hour in
+                            HourSlot(
+                                label: hourLabel(hour),
+                                leadingLabelWidth: leadingLabelWidth,
+                                height: hourHeight,
+                                onTapHalf: { half in
+                                    // half = 0.0 (top of hour) or 0.5 (bottom of hour)
+                                    onCreateAt(Double(hour) + half)
+                                }
+                            )
+                            .id(hour)
+                        }
+                    }
+
+                    // Event blocks with column-based overlap layout.
+                    ForEach(layoutEvents(), id: \.event.id) { laid in
+                        EventBlock(event: laid.event,
+                                   firstHour: firstHour,
+                                   hourHeight: hourHeight,
+                                   leadingInset: leadingLabelWidth + Tokens.Space.xs,
+                                   column: laid.column,
+                                   columnCount: laid.columnCount,
+                                   onTap: { onSelect(laid.event) })
+                    }
+
+                    // Red current-time line — only when viewing today.
+                    if Calendar.current.isDateInToday(anchorDate) {
+                        NowLine(firstHour: firstHour,
+                                hourHeight: hourHeight,
+                                leadingInset: leadingLabelWidth + Tokens.Space.xs)
                     }
                 }
-
-                // Event blocks with column-based overlap layout.
-                ForEach(layoutEvents(), id: \.event.id) { laid in
-                    EventBlock(event: laid.event,
-                               firstHour: firstHour,
-                               hourHeight: hourHeight,
-                               leadingInset: leadingLabelWidth + Tokens.Space.xs,
-                               column: laid.column,
-                               columnCount: laid.columnCount,
-                               onTap: { onSelect(laid.event) })
+                .padding(.top, 4)
+            }
+            .scrollIndicators(.hidden)
+            .onAppear {
+                // Defer one tick so SwiftUI has laid out the rows before we
+                // ask the proxy to jump.
+                DispatchQueue.main.async {
+                    proxy.scrollTo(anchorHour(for: anchorDate), anchor: .center)
                 }
             }
-            .padding(.top, 4)
+            .onChange(of: anchorDate) { _, new in
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    proxy.scrollTo(anchorHour(for: new), anchor: .center)
+                }
+            }
         }
-        .scrollIndicators(.hidden)
     }
 
     private func hourLabel(_ hour: Int) -> String {
@@ -251,38 +286,44 @@ private struct EventBlock: View {
     let onTap: () -> Void
 
     @State private var hovering = false
+    @State private var pressed = false
 
     var body: some View {
         let (offsetY, height) = layout()
-        Button(action: onTap) {
-            HStack(spacing: 6) {
-                Text(compactStartTime)
-                    .font(.system(size: 12, weight: .regular))
-                    .monospacedDigit()
-                    .foregroundStyle(textColor.opacity(0.78))
-                Text(event.title)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(textColor)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, Tokens.Space.xs)
-            .padding(.vertical, 4)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(height: max(height, 22), alignment: .center)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(blockColor)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(Color.white.opacity(hovering ? 0.5 : 0), lineWidth: 1.5)
-            )
-            .contentShape(Rectangle())
+        HStack(spacing: 6) {
+            Text(compactStartTime)
+                .font(.system(size: 12, weight: .regular))
+                .monospacedDigit()
+                .foregroundStyle(textColor.opacity(0.78))
+            Text(event.title)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(textColor)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
         }
-        .buttonStyle(PressableStyle())
+        .padding(.horizontal, Tokens.Space.xs)
+        .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: max(height, 22), alignment: .center)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(blockColor)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Color.white.opacity(hovering ? 0.5 : 0), lineWidth: 1.5)
+        )
+        .scaleEffect(pressed ? 0.97 : 1.0)
+        .animation(.easeOut(duration: 0.12), value: pressed)
+        .contentShape(Rectangle())
         .onHover { hovering = $0 }
+        .onTapGesture { onTap() }
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in pressed = true }
+                .onEnded { _ in pressed = false }
+        )
         .padding(.leading, leadingInset)
         .padding(.trailing, 4)
         .offset(y: offsetY)
@@ -521,5 +562,48 @@ private struct NavButton: View {
         }
         .buttonStyle(PressableStyle())
         .onHover { hovering = $0 }
+    }
+}
+
+// MARK: - Current-time indicator
+
+/// Horizontal red line + dot showing the current time, positioned by hour
+/// offset from `firstHour`. Auto-refreshes every minute.
+struct NowLine: View {
+    let firstHour: Int
+    let hourHeight: CGFloat
+    let leadingInset: CGFloat
+
+    var body: some View {
+        TimelineView(.periodic(from: Date(), by: 60)) { context in
+            let cal = Calendar.current
+            let h = cal.component(.hour, from: context.date)
+            let m = cal.component(.minute, from: context.date)
+            let y = (Double(h) - Double(firstHour) + Double(m) / 60.0)
+                * Double(hourHeight)
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(Color.red)
+                    .frame(width: 8, height: 8)
+                    .offset(x: -4)
+                Rectangle()
+                    .fill(Color.red)
+                    .frame(height: 1.5)
+                Text(Self.timeLabel(for: context.date))
+                    .font(.system(size: 10, weight: .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(Color.red)
+            }
+            .padding(.leading, leadingInset)
+            .padding(.trailing, 4)
+            .offset(y: CGFloat(y) - 4)
+            .allowsHitTesting(false)
+        }
+    }
+
+    private static func timeLabel(for date: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "h:mm a"
+        return f.string(from: date)
     }
 }
