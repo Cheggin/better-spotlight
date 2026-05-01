@@ -27,7 +27,11 @@ final class SpotlightPanel: NSPanel {
     override var canBecomeMain: Bool { false }
     override var acceptsFirstResponder: Bool { true }
 
-    override func cancelOperation(_ sender: Any?) { orderOut(nil) }
+    override func cancelOperation(_ sender: Any?) {
+        let request = SpotlightEscapeRequest()
+        NotificationCenter.default.post(name: .spotlightEscapePressed, object: request)
+        if !request.handled { orderOut(nil) }
+    }
 }
 
 @MainActor
@@ -135,7 +139,11 @@ final class SpotlightPanelController {
     private func installLocalEscapeMonitor() {
         localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             if event.keyCode == 53 { // escape
-                self?.hide()
+                let request = SpotlightEscapeRequest()
+                NotificationCenter.default.post(name: .spotlightEscapePressed, object: request)
+                if !request.handled {
+                    self?.hide()
+                }
                 return nil
             }
             return event
@@ -166,6 +174,11 @@ final class SpotlightPanelController {
     }
 }
 
+final class SpotlightEscapeRequest {
+    var handled = false
+}
+
 extension Notification.Name {
     static let dismissSpotlight = Notification.Name("BetterSpotlight.dismiss")
+    static let spotlightEscapePressed = Notification.Name("BetterSpotlight.escapePressed")
 }

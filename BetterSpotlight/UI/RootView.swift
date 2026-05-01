@@ -87,6 +87,10 @@ struct RootView: View {
         }
         .onDisappear { coordinator.stopPolling() }
         .onChange(of: query) { _, new in coordinator.update(query: new, category: category) }
+        .onReceive(NotificationCenter.default.publisher(for: .spotlightEscapePressed)) { notification in
+            guard let request = notification.object as? SpotlightEscapeRequest else { return }
+            request.handled = handleEscape()
+        }
         .onChange(of: coordinator.results.first?.id) { _, _ in
             if selectedID == nil { selectedID = coordinator.results.first?.id }
         }
@@ -287,6 +291,20 @@ struct RootView: View {
     }
 
     private func dismiss() {
+        if handleEscape() { return }
         NotificationCenter.default.post(name: .dismissSpotlight, object: nil)
+    }
+
+    @discardableResult
+    private func handleEscape() -> Bool {
+        if composerStart != nil {
+            composerStart = nil
+            return true
+        }
+        if showCalendarPopover {
+            showCalendarPopover = false
+            return true
+        }
+        return false
     }
 }
