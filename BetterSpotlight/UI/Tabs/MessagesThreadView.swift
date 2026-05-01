@@ -308,17 +308,25 @@ private struct Bubble: View {
         HStack(alignment: .bottom, spacing: 6) {
             if message.isFromMe { Spacer(minLength: 40) }
             VStack(alignment: message.isFromMe ? .trailing : .leading, spacing: 2) {
-                Text(message.text)
-                    .font(.system(size: 13))
-                    .foregroundStyle(message.isFromMe ? .white : Tokens.Color.textPrimary)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 7)
-                    .background(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .fill(message.isFromMe
-                                  ? Tokens.Color.accent
-                                  : Color(red: 0.93, green: 0.94, blue: 0.96))
-                    )
+                if !message.attachments.isEmpty {
+                    ForEach(message.attachments) { attachment in
+                        AttachmentBubble(attachment: attachment,
+                                         isFromMe: message.isFromMe)
+                    }
+                }
+                if !message.text.isEmpty {
+                    Text(message.text)
+                        .font(.system(size: 13))
+                        .foregroundStyle(message.isFromMe ? .white : Tokens.Color.textPrimary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(message.isFromMe
+                                      ? Tokens.Color.accent
+                                      : Color(red: 0.93, green: 0.94, blue: 0.96))
+                        )
+                }
                 Text(timeLabel)
                     .font(.system(size: 9))
                     .monospacedDigit()
@@ -333,6 +341,48 @@ private struct Bubble: View {
         let f = DateFormatter()
         f.dateFormat = "h:mm a"
         return f.string(from: message.date)
+    }
+}
+
+private struct AttachmentBubble: View {
+    let attachment: ChatAttachment
+    let isFromMe: Bool
+
+    var body: some View {
+        Group {
+            if attachment.isImage, let image = NSImage(contentsOfFile: attachment.path) {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fill)
+                    .frame(maxWidth: 230, maxHeight: 260)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(Color.black.opacity(0.05), lineWidth: 0.5)
+                    )
+                    .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .onTapGesture { NSWorkspace.shared.open(URL(fileURLWithPath: attachment.path)) }
+            } else {
+                HStack(spacing: 8) {
+                    Image(systemName: attachment.isImage ? "photo" : "paperclip")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text(attachment.displayName.isEmpty ? "Attachment" : attachment.displayName)
+                        .font(.system(size: 13))
+                        .lineLimit(1)
+                }
+                .foregroundStyle(isFromMe ? .white : Tokens.Color.textPrimary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(isFromMe
+                              ? Tokens.Color.accent
+                              : Color(red: 0.93, green: 0.94, blue: 0.96))
+                )
+                .onTapGesture { NSWorkspace.shared.open(URL(fileURLWithPath: attachment.path)) }
+            }
+        }
     }
 }
 

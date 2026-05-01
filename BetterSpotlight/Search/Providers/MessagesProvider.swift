@@ -221,7 +221,8 @@ final class MessagesProvider: SearchProvider {
                 text: $0.text,
                 date: $0.date,
                 isFromMe: $0.isFromMe,
-                isUnread: $0.isUnread
+                isUnread: $0.isUnread,
+                attachments: $0.attachments
             )
         }
         return messages.reversed() // chronological (oldest → newest)
@@ -279,7 +280,7 @@ private enum ChatDB {
     /// Predicate matching any row that has either a populated plain-text
     /// column or an attributedBody blob (modern iMessages live in the latter).
     static let bodyPredicate =
-        "((m.text IS NOT NULL AND m.text != '') OR m.attributedBody IS NOT NULL)"
+        "((m.text IS NOT NULL AND m.text != '') OR m.attributedBody IS NOT NULL OR m.cache_has_attachments = 1)"
 
     /// Builds the SELECT we always use. `whereClause` is inlined verbatim so
     /// callers can build query-specific constraints.
@@ -287,7 +288,20 @@ private enum ChatDB {
         """
         SELECT m.ROWID, m.text, m.date, m.is_from_me, m.is_read,
                COALESCE(h.id, '') AS handle,
-               COALESCE(quote(m.attributedBody), '')
+               COALESCE(quote(m.attributedBody), ''),
+               COALESCE((
+                   SELECT group_concat(
+                       COALESCE(a.filename, '') || '__BS_FIELD__' ||
+                       COALESCE(a.mime_type, '') || '__BS_FIELD__' ||
+                       COALESCE(a.uti, '') || '__BS_FIELD__' ||
+                       COALESCE(a.transfer_name, ''),
+                       '__BS_ITEM__'
+                   )
+                   FROM message_attachment_join maj
+                   JOIN attachment a ON a.ROWID = maj.attachment_id
+                   WHERE maj.message_id = m.ROWID
+                     AND COALESCE(a.hide_attachment, 0) = 0
+               ), '') AS attachments
         FROM message m
         LEFT JOIN handle h ON h.ROWID = m.handle_id
         \(whereClause)
@@ -304,6 +318,19 @@ private enum ChatDB {
             SELECT m.ROWID, m.text, m.date, m.is_from_me, m.is_read,
                    COALESCE(h.id, '') AS handle,
                    COALESCE(quote(m.attributedBody), '') AS attributed_body,
+                   COALESCE((
+                       SELECT group_concat(
+                           COALESCE(a.filename, '') || '__BS_FIELD__' ||
+                           COALESCE(a.mime_type, '') || '__BS_FIELD__' ||
+                           COALESCE(a.uti, '') || '__BS_FIELD__' ||
+                           COALESCE(a.transfer_name, ''),
+                           '__BS_ITEM__'
+                       )
+                       FROM message_attachment_join maj
+                       JOIN attachment a ON a.ROWID = maj.attachment_id
+                       WHERE maj.message_id = m.ROWID
+                         AND COALESCE(a.hide_attachment, 0) = 0
+                   ), '') AS attachments,
                    ROW_NUMBER() OVER (
                        PARTITION BY COALESCE(h.id, 'self:' || m.ROWID)
                        ORDER BY m.date DESC
@@ -312,7 +339,7 @@ private enum ChatDB {
             LEFT JOIN handle h ON h.ROWID = m.handle_id
             WHERE \(bodyPredicate) AND h.id IS NOT NULL AND h.id != ''
         )
-        SELECT ROWID, text, date, is_from_me, is_read, handle, attributed_body
+        SELECT ROWID, text, date, is_from_me, is_read, handle, attributed_body, attachments
         FROM ranked
         WHERE rn = 1
         ORDER BY date DESC
@@ -387,9 +414,9 @@ private enum ChatDB {
         let raw = String(data: data, encoding: .utf8) ?? ""
         var out: [RawMessage] = []
         for record in raw.split(separator: "\u{1E}", omittingEmptySubsequences: true) {
-            let cols = record.split(separator: "\u{1F}", maxSplits: 6,
+            let cols = record.split(separator: "\u{1F}", maxSplits: 7,
                                     omittingEmptySubsequences: false)
-            guard cols.count == 7,
+            guard cols.count == 8,
                   let rowID = Int(cols[0]),
                   let dateNS = Double(cols[2])
             else { continue }
@@ -398,20 +425,58 @@ private enum ChatDB {
             let isUnread = (Int(cols[4]) ?? 1) == 0
             let handle = String(cols[5])
             let attributedQuoted = String(cols[6])
+            let attachments = parseAttachments(String(cols[7]))
             let seconds = dateNS > 1_000_000_000_000 ? dateNS / 1_000_000_000 : dateNS
             let date = Date(timeIntervalSince1970: appleEpoch + seconds)
 
             if text.isEmpty, let decoded = decodeAttributedBody(attributedQuoted) {
                 text = decoded
             }
-            guard !text.isEmpty else { continue }
+            text = cleanMessageText(text)
+            guard !text.isEmpty || !attachments.isEmpty else { continue }
 
             out.append(RawMessage(
                 rowID: rowID, text: text, date: date,
-                isFromMe: isFromMe, isUnread: isUnread, handle: handle
+                isFromMe: isFromMe, isUnread: isUnread, handle: handle,
+                attachments: attachments
             ))
         }
         return out
+    }
+
+    private static func parseAttachments(_ raw: String) -> [ChatAttachment] {
+        guard !raw.isEmpty else { return [] }
+        return raw.components(separatedBy: "__BS_ITEM__")
+            .compactMap { item -> ChatAttachment? in
+                let parts = item.components(separatedBy: "__BS_FIELD__")
+                guard !parts.isEmpty else { return nil }
+                let path = expandedMessagePath(parts[0])
+                guard !path.isEmpty else { return nil }
+                let mimeType = parts.count > 1 ? parts[1] : ""
+                let uti = parts.count > 2 ? parts[2] : ""
+                let transferName = parts.count > 3 ? parts[3] : ""
+                return ChatAttachment(path: path,
+                                      mimeType: mimeType,
+                                      uti: uti,
+                                      displayName: transferName.isEmpty
+                                          ? URL(fileURLWithPath: path).lastPathComponent
+                                          : transferName)
+            }
+    }
+
+    private static func expandedMessagePath(_ raw: String) -> String {
+        if raw.hasPrefix("~/") {
+            let suffix = raw.dropFirst(2)
+            return FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(String(suffix))
+                .path
+        }
+        return (raw as NSString).expandingTildeInPath
+    }
+
+    private static func cleanMessageText(_ text: String) -> String {
+        text.replacingOccurrences(of: "\u{FFFC}", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Decodes the message text out of a chat.db `attributedBody` blob.
@@ -519,6 +584,7 @@ struct RawMessage {
     let isFromMe: Bool
     let isUnread: Bool
     let handle: String
+    let attachments: [ChatAttachment]
 
     var relativeDate: String {
         let f = RelativeDateTimeFormatter()
@@ -534,8 +600,21 @@ struct RawMessage {
             text: text,
             date: date,
             isFromMe: isFromMe,
-            isUnread: isUnread
+            isUnread: isUnread,
+            attachments: attachments
         )
+    }
+}
+
+struct ChatAttachment: Hashable, Identifiable {
+    var id: String { path }
+    let path: String
+    let mimeType: String
+    let uti: String
+    let displayName: String
+
+    var isImage: Bool {
+        mimeType.hasPrefix("image/") || uti.hasPrefix("public.image")
     }
 }
 
@@ -547,6 +626,7 @@ struct ChatMessage: Hashable {
     let date: Date
     let isFromMe: Bool
     let isUnread: Bool
+    let attachments: [ChatAttachment]
 
     var relativeDate: String {
         let f = RelativeDateTimeFormatter()
