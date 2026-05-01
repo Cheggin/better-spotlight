@@ -43,8 +43,7 @@ final class SearchCoordinator: ObservableObject {
         providers.forEach { $0.cancel() }
         loadingCategories.removeAll()
         if query.isEmpty {
-            markLoading(category == .all ? providers : providersFor(category: category, query: query),
-                        isLoading: true)
+            markLoading(providersFor(category: category, query: query), isLoading: true)
         }
 
         debounce = Task { [weak self] in
@@ -61,7 +60,9 @@ final class SearchCoordinator: ObservableObject {
 
     func filtered(for category: SearchCategory) -> [SearchResult] {
         let timeFiltered = applyTimeRange(results)
-        guard category != .all else { return timeFiltered }
+        guard category != .all else {
+            return timeFiltered.filter { Self.allVisibleCategories.contains($0.category) }
+        }
         switch category {
         case .files:    return timeFiltered.filter { $0.category == .files }
         case .folders:  return timeFiltered.filter { $0.category == .folders }
@@ -130,6 +131,9 @@ final class SearchCoordinator: ObservableObject {
 
     private(set) var lastQuery: String = ""
     private(set) var lastCategory: SearchCategory = .all
+    private static let allVisibleCategories: Set<SearchCategory> = [
+        .calendar, .mail, .messages,
+    ]
 
     private func run(query: String, category: SearchCategory) async {
         let searchStart = Date()
@@ -191,6 +195,7 @@ final class SearchCoordinator: ObservableObject {
                                        query: String,
                                        sourceCategory: SearchCategory) {
         guard query.isEmpty else { return }
+        guard sourceCategory != .all else { return }
         let activeIDs = Set(activeProviders.map(ObjectIdentifier.init))
         let warmProviders = providers.filter { activeIDs.contains(ObjectIdentifier($0)) == false }
         guard !warmProviders.isEmpty else { return }
@@ -254,7 +259,7 @@ final class SearchCoordinator: ObservableObject {
         switch category {
         case .all:
             return providers.filter {
-                $0.category == .calendar || $0.category == .messages || $0.category == .contacts
+                $0.category == .calendar || $0.category == .mail || $0.category == .messages
             }
         case .files, .folders:
             return providers.filter { $0.category == .files }

@@ -10,16 +10,21 @@ struct ResultsList: View {
     var loadingCategories: Set<SearchCategory> = []
     @EnvironmentObject var preferences: Preferences
 
+    private var displayResults: [SearchResult] {
+        guard category == .all else { return results }
+        return results.filter { Self.allVisibleCategories.contains($0.category) }
+    }
+
     private var favorites: [SearchResult] {
         // Preserve favoriteIDs order.
         preferences.favoriteIDs.compactMap { id in
-            results.first { $0.id == id }
+            displayResults.first { $0.id == id }
         }
     }
 
     private var topHit: SearchResult? {
-        let candidates = results.filter { !preferences.isFavorite($0.id) }
-        guard category == .all else { return candidates.first }
+        let candidates = displayResults.filter { !preferences.isFavorite($0.id) }
+        guard category == .all else { return nil }
 
         let now = Date()
         if let urgent = candidates
@@ -31,15 +36,21 @@ struct ResultsList: View {
             return urgent
         }
 
-        return candidates.first { $0.category != .mail }
+        return candidates.first { $0.category == .calendar || $0.category == .messages }
+    }
+
+    private var displayedTopHit: SearchResult? {
+        guard let hit = topHit else { return nil }
+        return shouldReserveTopHitSlot(for: hit) ? nil : hit
     }
 
     private var groupedTail: [(SearchCategory, [SearchResult])] {
-        let consumed = Set(favorites.map(\.id) + [topHit?.id].compactMap { $0 })
-        let tail = results.filter { !consumed.contains($0.id) }
+        let topHitID = (category == .all) ? displayedTopHit?.id : nil
+        let consumed = Set(favorites.map(\.id) + [topHitID].compactMap { $0 })
+        let tail = displayResults.filter { !consumed.contains($0.id) }
         // No cap when a single category is active — let the user scroll.
         let cap = (category == .all) ? 3 : Int.max
-        return SearchCategory.orderedDisplay.compactMap { cat in
+        return displayCategories.compactMap { cat in
             let inCat = tail.filter { $0.category == cat }.prefix(cap)
             if inCat.isEmpty, !shouldShowSkeletonSection(for: cat) { return nil }
             return (cat, Array(inCat))
@@ -54,7 +65,7 @@ struct ResultsList: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
-                    if results.isEmpty && !isShowingSkeletons {
+                    if displayResults.isEmpty && !isShowingSkeletons {
                         EmptyResultsView(query: query,
                                          googleSignedIn: googleSignedIn,
                                          category: category)
@@ -77,21 +88,22 @@ struct ResultsList: View {
                             }
                         }
 
-                        // TOP HIT — first non-favorite result.
-                        if let hit = topHit {
-                            SectionHeader(title: "TOP HIT")
-                                .padding(.top, favorites.isEmpty ? 2 : 6)
-                            TopHitCard(
-                                result: hit,
-                                isSelected: selectedID == hit.id,
-                                onTap: { selectedID = hit.id },
-                                onDoubleTap: onActivate
-                            )
-                            .id(hit.id)
-                        } else if shouldShowTopHitSkeleton {
-                            SectionHeader(title: "TOP HIT")
-                                .padding(.top, favorites.isEmpty ? 2 : 6)
-                            TopHitSkeletonCard()
+                        if category == .all {
+                            if let hit = displayedTopHit {
+                                SectionHeader(title: "TOP HIT")
+                                    .padding(.top, favorites.isEmpty ? 2 : 6)
+                                TopHitCard(
+                                    result: hit,
+                                    isSelected: selectedID == hit.id,
+                                    onTap: { selectedID = hit.id },
+                                    onDoubleTap: onActivate
+                                )
+                                .id(hit.id)
+                            } else if shouldShowTopHitSkeleton {
+                                SectionHeader(title: "TOP HIT")
+                                    .padding(.top, favorites.isEmpty ? 2 : 6)
+                                TopHitSkeletonCard()
+                            }
                         }
 
                         // Remaining results grouped by category.
@@ -112,11 +124,15 @@ struct ResultsList: View {
                                     )
                                     .id(result.id)
                                 }
+                                let remainingSkeletons = skeletonRemainder(for: cat, itemCount: items.count)
+                                if remainingSkeletons > 0 {
+                                    SkeletonRows(category: cat, count: remainingSkeletons)
+                                }
                             }
 
                             // Inline "Search in <category>" / "View Calendar" affordance
                             // after each category list, matching reference.
-                            if !items.isEmpty {
+                            if shouldShowInlineCTA(for: cat, items: items) {
                                 inlineCTA(for: cat)
                             }
                         }
@@ -136,13 +152,33 @@ struct ResultsList: View {
         }
     }
 
+    private static let allVisibleCategories: Set<SearchCategory> = [
+        .calendar, .mail, .messages,
+    ]
+
+    private var displayCategories: [SearchCategory] {
+        category == .all
+            ? [.calendar, .mail, .messages]
+            : SearchCategory.orderedDisplay
+    }
+
     private func sectionHeaderTitle(for cat: SearchCategory) -> String {
         // Reference renames CALENDAR → EVENTS in the result list.
         cat == .calendar ? "EVENTS" : cat.uppercaseTitle
     }
 
     private var shouldShowTopHitSkeleton: Bool {
-        category == .all && query.isEmpty && results.isEmpty && isShowingSkeletons
+        guard category == .all, query.isEmpty, isShowingSkeletons else { return false }
+        guard let hit = topHit else { return true }
+        return shouldReserveTopHitSlot(for: hit)
+    }
+
+    private func shouldReserveTopHitSlot(for hit: SearchResult) -> Bool {
+        guard category == .all, query.isEmpty else { return false }
+        guard loadingCategories.contains(.calendar) || loadingCategories.contains(.messages) else {
+            return false
+        }
+        return hit.category != .calendar && hit.category != .messages
     }
 
     private func shouldShowSkeletonSection(for cat: SearchCategory) -> Bool {
@@ -151,9 +187,25 @@ struct ResultsList: View {
     }
 
     private func skeletonCount(for cat: SearchCategory) -> Int {
+        if category == .all { return 3 }
         switch cat {
         case .contacts: return 2
         default: return category == .all ? 2 : 4
+        }
+    }
+
+    private func skeletonRemainder(for cat: SearchCategory, itemCount: Int) -> Int {
+        guard shouldShowSkeletonSection(for: cat) else { return 0 }
+        return max(0, skeletonCount(for: cat) - itemCount)
+    }
+
+    private func shouldShowInlineCTA(for cat: SearchCategory,
+                                     items: [SearchResult]) -> Bool {
+        switch cat {
+        case .calendar, .mail:
+            return !items.isEmpty || shouldShowSkeletonSection(for: cat)
+        default:
+            return false
         }
     }
 
@@ -173,6 +225,14 @@ struct ResultsList: View {
     }
 }
 
+private enum ResultListMetrics {
+    static let rowHeight: CGFloat = 34
+    static let rowIcon: CGFloat = 22
+    static let rowTitleHeight: CGFloat = 12
+    static let rowSubtitleHeight: CGFloat = 10
+    static let topHitHeight: CGFloat = 42
+}
+
 // MARK: - TOP HIT card
 
 private struct TopHitCard: View {
@@ -184,17 +244,18 @@ private struct TopHitCard: View {
     @State private var hovering = false
 
     var body: some View {
-        HStack(spacing: 10) {
-            ResultLeadingIcon(result: result, size: 26)
+        HStack(spacing: isSelected ? 10 : 8) {
+            ResultLeadingIcon(result: result, size: isSelected ? 26 : 22)
 
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: isSelected ? 1 : 0) {
                 Text(result.title)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: isSelected ? 13 : 12,
+                                  weight: isSelected ? .semibold : .medium))
                     .foregroundStyle(Tokens.Color.textPrimary)
                     .lineLimit(1)
                 if let sub = result.subtitle {
                     Text(sub)
-                        .font(.system(size: 11))
+                        .font(.system(size: isSelected ? 11 : 10))
                         .foregroundStyle(Tokens.Color.textTertiary)
                         .lineLimit(1)
                 }
@@ -202,7 +263,7 @@ private struct TopHitCard: View {
 
             Spacer(minLength: 4)
 
-            if let label = urgencyLabel {
+            if isSelected, let label = urgencyLabel {
                 Text(label)
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(result.category.tint)
@@ -213,24 +274,29 @@ private struct TopHitCard: View {
                     )
             }
 
-            Image(systemName: "return")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(Tokens.Color.textTertiary)
-                .frame(width: 18, height: 18)
-                .background(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(Tokens.Color.surfaceSunken)
-                )
+            if isSelected {
+                Image(systemName: "return")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Tokens.Color.textTertiary)
+                    .frame(width: 18, height: 18)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .fill(Tokens.Color.surfaceSunken)
+                    )
+            }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
+        .padding(.horizontal, isSelected ? 10 : 6)
+        .padding(.vertical, isSelected ? 8 : 4)
+        .frame(height: ResultListMetrics.topHitHeight)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: isSelected ? 12 : Tokens.Radius.row,
+                             style: .continuous)
                 .fill(isSelected ? Tokens.Color.surfaceRaised :
-                      hovering ? Color.black.opacity(0.04) : .clear)
+                      hovering ? Color.black.opacity(0.03) : .clear)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: isSelected ? 12 : Tokens.Radius.row,
+                             style: .continuous)
                 .strokeBorder(isSelected ? Tokens.Color.hairline : .clear,
                               lineWidth: 0.5)
         )
@@ -278,6 +344,7 @@ private struct TopHitSkeletonCard: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
+        .frame(height: ResultListMetrics.topHitHeight)
         .accessibilityHidden(true)
     }
 }
@@ -304,16 +371,25 @@ private struct SkeletonRows: View {
         VStack(spacing: 2) {
             ForEach(0..<count, id: \.self) { index in
                 HStack(spacing: 8) {
-                    SkeletonBlock(width: 22, height: 22, cornerRadius: category == .messages ? 11 : 6)
-                    VStack(alignment: .leading, spacing: 4) {
-                        SkeletonBlock(width: titleWidth(for: index), height: 10, cornerRadius: 4)
-                        SkeletonBlock(width: subtitleWidth(for: index), height: 8, cornerRadius: 4)
+                    SkeletonBlock(width: ResultListMetrics.rowIcon,
+                                  height: ResultListMetrics.rowIcon,
+                                  cornerRadius: category == .messages ? 11 : 6)
+                    VStack(alignment: .leading, spacing: 0) {
+                        SkeletonBlock(width: titleWidth(for: index),
+                                      height: ResultListMetrics.rowTitleHeight,
+                                      cornerRadius: 4)
+                        SkeletonBlock(width: subtitleWidth(for: index),
+                                      height: ResultListMetrics.rowSubtitleHeight,
+                                      cornerRadius: 4)
                     }
                     Spacer(minLength: 4)
-                    SkeletonBlock(width: 38, height: 9, cornerRadius: 4)
+                    SkeletonBlock(width: 38,
+                                  height: ResultListMetrics.rowSubtitleHeight,
+                                  cornerRadius: 4)
                 }
                 .padding(.horizontal, 6)
                 .padding(.vertical, 4)
+                .frame(height: ResultListMetrics.rowHeight)
             }
         }
         .accessibilityHidden(true)
@@ -406,6 +482,7 @@ private struct ResultRow: View {
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 4)
+        .frame(height: ResultListMetrics.rowHeight)
         .background(
             RoundedRectangle(cornerRadius: Tokens.Radius.row, style: .continuous)
                 .fill(isSelected ? Tokens.Color.selection :
