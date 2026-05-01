@@ -4,7 +4,13 @@ import Foundation
 struct GmailAPI {
     let session: GoogleSession
 
-    func search(query: String, max: Int = 10) async throws -> [MailMessage] {
+    enum FetchMode {
+        case metadata
+        case full
+    }
+
+    func search(query: String, max: Int = 10, mode: FetchMode = .metadata) async throws -> [MailMessage] {
+        let searchStart = Date()
         let token = try await session.validAccessToken()
 
         // 1. List message IDs. Empty query → recent inbox messages.
@@ -18,33 +24,56 @@ struct GmailAPI {
         }
         listComps.queryItems = items
         Log.info("gmail list q='\(trimmed)' max=\(max)", category: "mail")
+        Log.info("gmail list begin q='\(trimmed)' max=\(max) mode=\(mode)", category: "timing")
         let listJSON = try await getJSON(url: listComps.url!, token: token)
         guard let messages = listJSON["messages"] as? [[String: Any]] else {
             Log.info("gmail list: 0 messages", category: "mail")
+            Log.info("gmail list complete count=0 +\(Int(Date().timeIntervalSince(searchStart) * 1_000))ms",
+                     category: "timing")
             return []
         }
         Log.info("gmail list: \(messages.count) ids", category: "mail")
+        Log.info("gmail list complete count=\(messages.count) +\(Int(Date().timeIntervalSince(searchStart) * 1_000))ms",
+                 category: "timing")
 
-        // 2. Fetch each message in parallel. `format=full` gives us enough MIME
-        // structure to build a readable preview and list attachment metadata
-        // without downloading attachment bytes.
+        // 2. Fetch each message in parallel. Lists use metadata for speed; the
+        // selected detail view fetches full MIME only when needed.
         return try await withThrowingTaskGroup(of: MailMessage?.self) { group in
             for entry in messages {
                 guard let id = entry["id"] as? String else { continue }
                 group.addTask {
-                    try await fetchMessage(id: id, token: token)
+                    try await fetchMessage(id: id, token: token, mode: mode)
                 }
             }
             var out: [MailMessage] = []
             for try await msg in group { if let m = msg { out.append(m) } }
             out.sort { $0.date > $1.date }
+            Log.info("gmail search complete q='\(trimmed)' count=\(out.count) mode=\(mode) +\(Int(Date().timeIntervalSince(searchStart) * 1_000))ms",
+                     category: "timing")
             return out
         }
     }
 
-    private func fetchMessage(id: String, token: String) async throws -> MailMessage? {
+    func fetchFullMessage(id: String) async throws -> MailMessage? {
+        let token = try await session.validAccessToken()
+        return try await fetchMessage(id: id, token: token, mode: .full)
+    }
+
+    private func fetchMessage(id: String, token: String, mode: FetchMode) async throws -> MailMessage? {
+        let start = Date()
         var comps = URLComponents(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages/\(id)")!
-        comps.queryItems = [.init(name: "format", value: "full")]
+        switch mode {
+        case .metadata:
+            comps.queryItems = [
+                .init(name: "format", value: "metadata"),
+                .init(name: "metadataHeaders", value: "Subject"),
+                .init(name: "metadataHeaders", value: "From"),
+                .init(name: "metadataHeaders", value: "Date"),
+            ]
+        case .full:
+            comps.queryItems = [.init(name: "format", value: "full")]
+        }
+        Log.info("gmail message begin id=\(id) mode=\(mode)", category: "timing")
         let json = try await getJSON(url: comps.url!, token: token)
         let snippet = Self.cleanText(json["snippet"] as? String ?? "")
         let payload = (json["payload"] as? [String: Any]) ?? [:]
@@ -63,8 +92,12 @@ struct GmailAPI {
         }
         let (fromName, fromEmail) = parseFrom(fromRaw)
         let date = dateRaw.flatMap(parseRFC822) ?? Date()
-        let extracted = Self.extractPayload(payload)
+        let extracted = mode == .full
+            ? Self.extractPayload(payload)
+            : (bodyPreview: snippet, htmlBody: nil, attachments: [])
         let bodyPreview = extracted.bodyPreview.isEmpty ? snippet : extracted.bodyPreview
+        Log.info("gmail message complete id=\(id) mode=\(mode) +\(Int(Date().timeIntervalSince(start) * 1_000))ms",
+                 category: "timing")
 
         return MailMessage(
             id: id,

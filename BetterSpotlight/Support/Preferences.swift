@@ -13,6 +13,10 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(favoriteIDs, forKey: Keys.favorites) }
     }
 
+    @Published var lastSearchCategory: SearchCategory {
+        didSet { defaults.set(lastSearchCategory.rawValue, forKey: Keys.lastSearchCategory) }
+    }
+
     private let defaults = UserDefaults.standard
 
     init() {
@@ -20,6 +24,8 @@ final class Preferences: ObservableObject {
             defaults.array(forKey: Keys.folders) as? [Data] ?? []
         self.favoriteIDs =
             defaults.array(forKey: Keys.favorites) as? [String] ?? []
+        let rawCategory = defaults.string(forKey: Keys.lastSearchCategory)
+        self.lastSearchCategory = rawCategory.flatMap(SearchCategory.init(rawValue:)) ?? .all
     }
 
     func isFavorite(_ id: String) -> Bool { favoriteIDs.contains(id) }
@@ -89,5 +95,6 @@ final class Preferences: ObservableObject {
     private enum Keys {
         static let folders = "BetterSpotlight.searchableFolders"
         static let favorites = "BetterSpotlight.favorites"
+        static let lastSearchCategory = "BetterSpotlight.lastSearchCategory"
     }
 }

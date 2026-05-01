@@ -13,7 +13,9 @@ final class GmailProvider: SearchProvider {
             return []
         }
         let q = rawQuery.trimmingCharacters(in: .whitespaces)
-        let messages = try await GmailAPI(session: googleSession).search(query: q, max: 10)
+        let maxResults = q.isEmpty ? 8 : 10
+        let messages = try await GmailAPI(session: googleSession)
+            .search(query: q, max: maxResults, mode: .metadata)
         return messages.map { msg in
             let score = q.isEmpty ? 0.55
                 : (FuzzyMatcher.score(query: q, candidate: msg.subject) ?? 0.30)

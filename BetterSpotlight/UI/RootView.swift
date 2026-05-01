@@ -72,10 +72,13 @@ struct RootView: View {
         .onAppear {
             let start = Date()
             Log.info("root onAppear begin", category: "timing")
+            category = preferences.lastSearchCategory
+            Log.info("root restored category=\(category.title) +\(Int(Date().timeIntervalSince(start) * 1_000))ms",
+                     category: "timing")
             coordinator.attach(googleSession: googleSession, preferences: preferences)
             Log.info("root attach complete +\(Int(Date().timeIntervalSince(start) * 1_000))ms",
                      category: "timing")
-            coordinator.update(query: "")
+            coordinator.update(query: "", category: category)
             Log.info("root initial search scheduled +\(Int(Date().timeIntervalSince(start) * 1_000))ms",
                      category: "timing")
             coordinator.startPolling()
@@ -83,13 +86,15 @@ struct RootView: View {
                      category: "timing")
         }
         .onDisappear { coordinator.stopPolling() }
-        .onChange(of: query) { _, new in coordinator.update(query: new) }
+        .onChange(of: query) { _, new in coordinator.update(query: new, category: category) }
         .onChange(of: coordinator.results.first?.id) { _, _ in
             if selectedID == nil { selectedID = coordinator.results.first?.id }
         }
         .onChange(of: category) { _, _ in
+            preferences.lastSearchCategory = category
             selectedID = visibleResults.first?.id
             showCalendarPopover = false
+            coordinator.update(query: query, category: category)
         }
         .preferredColorScheme(.light)
         .background(Color.clear)

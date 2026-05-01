@@ -2,9 +2,16 @@ import SwiftUI
 import WebKit
 
 struct MailDetailView: View {
+    @EnvironmentObject var googleSession: GoogleSession
+
     let message: MailMessage
 
+    @State private var fullMessage: MailMessage?
+    @State private var isLoadingFullMessage = false
+
     var body: some View {
+        let displayMessage = fullMessage ?? message
+
         ScrollView {
             VStack(alignment: .leading, spacing: Tokens.Space.md) {
                 Text("MAIL")
@@ -12,42 +19,68 @@ struct MailDetailView: View {
                     .tracking(0.7)
                     .foregroundStyle(Tokens.Color.mailTint)
 
-                Text(message.subject.isEmpty ? "(no subject)" : message.subject)
+                Text(displayMessage.subject.isEmpty ? "(no subject)" : displayMessage.subject)
                     .font(.system(size: 20, weight: .semibold))
                     .foregroundStyle(Tokens.Color.textPrimary)
                     .lineLimit(3)
 
                 HStack(spacing: Tokens.Space.sm) {
-                    SenderAvatar(email: message.fromEmail,
-                                 displayName: message.fromName,
+                    SenderAvatar(email: displayMessage.fromEmail,
+                                 displayName: displayMessage.fromName,
                                  size: 32)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(message.fromName)
+                        Text(displayMessage.fromName)
                             .font(Tokens.Typeface.bodyEmphasis)
                             .foregroundStyle(Tokens.Color.textPrimary)
-                        Text(message.fromEmail)
+                        Text(displayMessage.fromEmail)
                             .font(Tokens.Typeface.caption)
                             .foregroundStyle(Tokens.Color.textTertiary)
                     }
                     Spacer()
-                    Text(message.relativeDate)
+                    Text(displayMessage.relativeDate)
                         .font(Tokens.Typeface.caption)
                         .monospacedDigit()
                         .foregroundStyle(Tokens.Color.textTertiary)
                 }
 
-                previewCard
+                previewCard(message: displayMessage)
 
-                if !message.attachments.isEmpty {
-                    attachmentsCard
+                if isLoadingFullMessage {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                }
+
+                if !displayMessage.attachments.isEmpty {
+                    attachmentsCard(message: displayMessage)
                 }
                 Spacer(minLength: 0)
             }
         }
         .scrollIndicators(.hidden)
+        .task(id: message.id) { await loadFullMessageIfNeeded() }
     }
 
-    private var previewCard: some View {
+    private func loadFullMessageIfNeeded() async {
+        fullMessage = nil
+        guard googleSession.isSignedIn, message.htmlBody == nil else { return }
+        let start = Date()
+        isLoadingFullMessage = true
+        Log.info("mail detail full fetch begin id=\(message.id)", category: "timing")
+        defer {
+            isLoadingFullMessage = false
+            Log.info("mail detail full fetch end id=\(message.id) +\(Int(Date().timeIntervalSince(start) * 1_000))ms",
+                     category: "timing")
+        }
+
+        do {
+            fullMessage = try await GmailAPI(session: googleSession).fetchFullMessage(id: message.id)
+        } catch {
+            Log.warn("mail detail full fetch failed: \(error)", category: "mail")
+        }
+    }
+
+    private func previewCard(message: MailMessage) -> some View {
         Group {
             if let html = message.htmlBody, !html.isEmpty {
                 MailHTMLPreview(html: html)
@@ -72,7 +105,7 @@ struct MailDetailView: View {
         )
     }
 
-    private var attachmentsCard: some View {
+    private func attachmentsCard(message: MailMessage) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("ATTACHMENTS")
                 .font(Tokens.Typeface.micro)

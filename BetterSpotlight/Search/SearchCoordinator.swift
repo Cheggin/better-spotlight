@@ -11,6 +11,7 @@ final class SearchCoordinator: ObservableObject {
     private var task: Task<Void, Never>?
     private var debounce: Task<Void, Never>?
     private var pollTask: Task<Void, Never>?
+    private var warmTask: Task<Void, Never>?
 
     /// Filter applied after providers return.
     enum TimeRange: String { case today, week, month, all }
@@ -31,20 +32,22 @@ final class SearchCoordinator: ObservableObject {
                  category: "timing")
     }
 
-    func update(query rawQuery: String) {
+    func update(query rawQuery: String, category: SearchCategory = .all) {
         let query = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         debounce?.cancel()
         task?.cancel()
+        warmTask?.cancel()
         providers.forEach { $0.cancel() }
 
         debounce = Task { [weak self] in
             let debounceStart = Date()
-            Log.info("search debounce begin query='\(query)'", category: "timing")
+            Log.info("search debounce begin query='\(query)' category=\(category.title)",
+                     category: "timing")
             try? await Task.sleep(nanoseconds: 140_000_000) // 140ms debounce
             guard !Task.isCancelled else { return }
-            Log.info("search debounce fired query='\(query)' +\(Int(Date().timeIntervalSince(debounceStart) * 1_000))ms",
+            Log.info("search debounce fired query='\(query)' category=\(category.title) +\(Int(Date().timeIntervalSince(debounceStart) * 1_000))ms",
                      category: "timing")
-            await self?.run(query: query)
+            await self?.run(query: query, category: category)
         }
     }
 
@@ -94,7 +97,7 @@ final class SearchCoordinator: ObservableObject {
 
     /// Re-runs the last query (for auto-refresh and post-mutation reloads).
     func refresh() {
-        update(query: lastQuery)
+        update(query: lastQuery, category: lastCategory)
     }
 
     /// Starts a 60 s background poll. Stops when `stopPolling()` is called.
@@ -118,24 +121,25 @@ final class SearchCoordinator: ObservableObject {
     // MARK: - Internal
 
     private(set) var lastQuery: String = ""
+    private(set) var lastCategory: SearchCategory = .all
 
-    private func run(query: String) async {
+    private func run(query: String, category: SearchCategory) async {
         let searchStart = Date()
         isLoading = true
         lastQuery = query
-        Log.info("search run begin query='\(query)' providers=\(providers.count)",
+        lastCategory = category
+        let activeProviders = providersFor(category: category, query: query)
+        Log.info("search run begin query='\(query)' category=\(category.title) providers=\(activeProviders.count)",
                  category: "timing")
         defer {
             isLoading = false
-            Log.info("search run complete query='\(query)' total=\(results.count) +\(Int(Date().timeIntervalSince(searchStart) * 1_000))ms",
+            Log.info("search run complete query='\(query)' category=\(category.title) total=\(results.count) +\(Int(Date().timeIntervalSince(searchStart) * 1_000))ms",
                      category: "timing")
         }
 
-        // Both empty and non-empty queries hit all providers — providers themselves
-        // decide what to do with an empty query (e.g. recent files / upcoming events).
-        var merged: [SearchResult] = []
+        var merged = resultsForInactiveCategories(keeping: activeProviders, query: query)
         await withTaskGroup(of: (String, [SearchResult], Int).self) { group in
-            for provider in providers {
+            for provider in activeProviders {
                 let label = provider.category.title
                 group.addTask { [provider] in
                     let providerStart = Date()
@@ -164,7 +168,96 @@ final class SearchCoordinator: ObservableObject {
                          category: "timing")
             }
         }
+        scheduleWarmProviders(excluding: activeProviders, query: query, sourceCategory: category)
         Log.info("search query='\(query)' total=\(self.results.count)", category: "search")
+    }
+
+    private func scheduleWarmProviders(excluding activeProviders: [SearchProvider],
+                                       query: String,
+                                       sourceCategory: SearchCategory) {
+        guard query.isEmpty else { return }
+        let activeIDs = Set(activeProviders.map(ObjectIdentifier.init))
+        let warmProviders = providers.filter { activeIDs.contains(ObjectIdentifier($0)) == false }
+        guard !warmProviders.isEmpty else { return }
+
+        warmTask = Task { [weak self, warmProviders] in
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            guard !Task.isCancelled else { return }
+            await self?.runWarmProviders(warmProviders, query: query, sourceCategory: sourceCategory)
+        }
+    }
+
+    private func runWarmProviders(_ warmProviders: [SearchProvider],
+                                  query: String,
+                                  sourceCategory: SearchCategory) async {
+        let warmStart = Date()
+        Log.info("search warm begin source=\(sourceCategory.title) providers=\(warmProviders.count)",
+                 category: "timing")
+        var merged = results
+        await withTaskGroup(of: (String, [SearchResult], Int).self) { group in
+            for provider in warmProviders {
+                let label = provider.category.title
+                group.addTask { [provider] in
+                    let providerStart = Date()
+                    Log.info("warm provider \(label) begin query='\(query)'", category: "timing")
+                    do {
+                        let results = try await provider.search(query: query)
+                        let ms = Int(Date().timeIntervalSince(providerStart) * 1_000)
+                        Log.info("warm provider \(label) complete count=\(results.count) +\(ms)ms",
+                                 category: "timing")
+                        return (label, results, ms)
+                    } catch {
+                        let ms = Int(Date().timeIntervalSince(providerStart) * 1_000)
+                        Log.warn("warm provider \(label) failed: \(error)")
+                        Log.info("warm provider \(label) failed +\(ms)ms error=\(error.localizedDescription)",
+                                 category: "timing")
+                        return (label, [], ms)
+                    }
+                }
+            }
+
+            for await (label, chunk, providerMs) in group {
+                guard !Task.isCancelled, lastQuery == query else { return }
+                merged.removeAll { result in
+                    if label == SearchCategory.files.title {
+                        return result.category == .files || result.category == .folders
+                    }
+                    return result.category.title == label
+                }
+                merged.append(contentsOf: chunk)
+                results = rank(merged)
+                counts = countByCategory(results)
+                Log.info("search warm merge provider=\(label) providerMs=\(providerMs) merged=\(merged.count) totalElapsed=\(Int(Date().timeIntervalSince(warmStart) * 1_000))ms",
+                         category: "timing")
+            }
+        }
+        Log.info("search warm complete source=\(sourceCategory.title) total=\(results.count) +\(Int(Date().timeIntervalSince(warmStart) * 1_000))ms",
+                 category: "timing")
+    }
+
+    private func providersFor(category: SearchCategory, query: String) -> [SearchProvider] {
+        guard query.isEmpty else { return providers }
+        switch category {
+        case .all:
+            return providers.filter {
+                $0.category == .calendar || $0.category == .messages || $0.category == .contacts
+            }
+        case .files, .folders:
+            return providers.filter { $0.category == .files }
+        case .mail:
+            return providers.filter { $0.category == .mail }
+        case .calendar, .messages, .contacts:
+            return providers.filter { $0.category == category }
+        }
+    }
+
+    private func resultsForInactiveCategories(keeping providers: [SearchProvider],
+                                              query: String) -> [SearchResult] {
+        guard query.isEmpty else { return [] }
+        let activeCategories = Set(providers.flatMap { provider -> [SearchCategory] in
+            provider.category == .files ? [.files, .folders] : [provider.category]
+        })
+        return results.filter { activeCategories.contains($0.category) == false }
     }
 
     private func rank(_ items: [SearchResult]) -> [SearchResult] {

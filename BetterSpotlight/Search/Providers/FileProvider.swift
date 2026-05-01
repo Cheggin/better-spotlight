@@ -17,6 +17,11 @@ final class FileProvider: NSObject, SearchProvider {
         let urls = preferences.effectiveSearchRoots
         let rootResults = urls.compactMap { Self.makeRootResult(url: $0, query: q) }
         Log.info("file query=\(q) scopes=\(urls.count)", category: "files")
+        if q.isEmpty {
+            Log.info("file empty query returning roots only count=\(rootResults.count)",
+                     category: "timing")
+            return Array(rootResults.prefix(20))
+        }
         return try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.main.async {
                 let mq = NSMetadataQuery()
