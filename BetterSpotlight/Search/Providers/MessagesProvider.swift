@@ -255,8 +255,13 @@ final class MessagesProvider: SearchProvider {
                                           max: Int)
         throws -> [RawMessage]
     {
-        let whereClause = ChatDB.recentWhereClause(query: query, extraHandles: extraHandles)
-        let sql = ChatDB.selectSQL(whereClause: whereClause, limit: max)
+        let sql: String
+        if query.isEmpty {
+            sql = ChatDB.latestPerHandleSQL(limit: max)
+        } else {
+            let whereClause = ChatDB.recentWhereClause(query: query, extraHandles: extraHandles)
+            sql = ChatDB.selectSQL(whereClause: whereClause, limit: max)
+        }
         return try ChatDB.run(sql: sql, dbURL: dbURL)
     }
 }
@@ -287,6 +292,30 @@ private enum ChatDB {
         LEFT JOIN handle h ON h.ROWID = m.handle_id
         \(whereClause)
         ORDER BY m.date DESC
+        LIMIT \(limit);
+        """
+    }
+
+    /// Latest message per handle. This prevents one busy conversation from
+    /// filling the row limit before other recent senders are considered.
+    static func latestPerHandleSQL(limit: Int) -> String {
+        """
+        WITH ranked AS (
+            SELECT m.ROWID, m.text, m.date, m.is_from_me, m.is_read,
+                   COALESCE(h.id, '') AS handle,
+                   COALESCE(quote(m.attributedBody), '') AS attributed_body,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY COALESCE(h.id, 'self:' || m.ROWID)
+                       ORDER BY m.date DESC
+                   ) AS rn
+            FROM message m
+            LEFT JOIN handle h ON h.ROWID = m.handle_id
+            WHERE \(bodyPredicate) AND h.id IS NOT NULL AND h.id != ''
+        )
+        SELECT ROWID, text, date, is_from_me, is_read, handle, attributed_body
+        FROM ranked
+        WHERE rn = 1
+        ORDER BY date DESC
         LIMIT \(limit);
         """
     }
