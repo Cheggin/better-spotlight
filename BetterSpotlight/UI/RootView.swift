@@ -42,6 +42,11 @@ struct RootView: View {
                 .padding(.vertical, Tokens.Space.xs)
         }
         .liquidGlass(radius: Tokens.Radius.panel)
+        // Clip foreground content to the same rounded shape so the drop
+        // shadow casts from the rounded silhouette instead of the rectangular
+        // bounding box.
+        .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.panel,
+                                    style: .continuous))
         .panelShadows()
         .padding(Tokens.Space.xs)
         .overlay(alignment: .center) {

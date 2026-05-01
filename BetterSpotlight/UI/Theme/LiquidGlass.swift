@@ -28,10 +28,6 @@ struct LiquidGlass: ViewModifier {
                     .strokeBorder(Color.white.opacity(0.55), lineWidth: 0.5)
                     .blendMode(.overlay)
             )
-            .overlay(
-                RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .strokeBorder(Color.black.opacity(0.06), lineWidth: 0.5)
-            )
     }
 }
 

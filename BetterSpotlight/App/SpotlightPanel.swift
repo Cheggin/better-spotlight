@@ -16,7 +16,12 @@ final class SpotlightPanel: NSPanel {
         self.titleVisibility = .hidden
         self.titlebarAppearsTransparent = true
         self.isMovableByWindowBackground = true
-        self.hasShadow = true
+        // The window-level shadow tracks the rectangular window bounds, not
+        // the SwiftUI rounded clip — letting it on produces a polygonal dark
+        // outline at the corners. SwiftUI's `panelShadows()` provides a
+        // softer drop shadow that follows the rounded path, so we rely on
+        // that instead.
+        self.hasShadow = false
         self.isOpaque = false
         self.backgroundColor = .clear
         self.hidesOnDeactivate = false

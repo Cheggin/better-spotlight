@@ -68,11 +68,11 @@ enum Tokens {
 }
 
 extension View {
-    /// Apply Tokens.Shadow.panel() as a stack of soft layered shadows.
+    /// Soft drop shadow below the panel. The previous tight 0,0/radius-1
+    /// halo made the corners read as a hard outline — this only offsets
+    /// downward so the shadow looks like a real cast shadow.
     func panelShadows() -> some View {
         self
-            .shadow(color: .black.opacity(0.04), radius: 1,  x: 0, y: 0)
-            .shadow(color: .black.opacity(0.10), radius: 24, x: 0, y: 12)
-            .shadow(color: .black.opacity(0.18), radius: 60, x: 0, y: 32)
+            .shadow(color: .black.opacity(0.12), radius: 40, x: 0, y: 24)
     }
 }
