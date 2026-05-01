@@ -66,8 +66,15 @@ struct MessagesThreadView: View {
 
     private func header(for m: ChatMessage) -> some View {
         // Only show the raw handle (phone / email) under the display name when
-        // it isn't a known contact — otherwise it's redundant.
+        // (1) it isn't a known contact (otherwise it's redundant) AND (2) it
+        // isn't just a re-formatted version of the same phone number — for
+        // unknown numbers, displayName already prints "(313) 307-4667" while
+        // handle is "+13133074667"; both are the same data.
         let knownContact = ContactsProvider.contact(forHandle: m.handle) != nil
+        let nameDigits = m.displayName.filter { $0.isNumber }
+        let handleDigits = m.handle.filter { $0.isNumber }
+        let displayNameIsHandle = !nameDigits.isEmpty
+            && (nameDigits == handleDigits || handleDigits.hasSuffix(nameDigits))
 
         return HStack(spacing: Tokens.Space.sm) {
             ContactAvatar(handle: m.handle, displayName: m.displayName, size: 36)
@@ -75,7 +82,7 @@ struct MessagesThreadView: View {
                 Text(m.displayName)
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Tokens.Color.textPrimary)
-                if !knownContact {
+                if !knownContact, !displayNameIsHandle {
                     Text(m.handle)
                         .font(.system(size: 11))
                         .foregroundStyle(Tokens.Color.textTertiary)
@@ -524,13 +531,27 @@ private struct ContactAvatar: View {
         } else {
             ZStack {
                 Circle().fill(Tokens.Color.contactTint.opacity(0.18))
-                Text(initials)
-                    .font(.system(size: size * 0.36, weight: .semibold))
-                    .foregroundStyle(Tokens.Color.contactTint)
+                if isAnonymousName {
+                    Image(systemName: "person.fill")
+                        .font(.system(size: size * 0.5, weight: .regular))
+                        .foregroundStyle(Tokens.Color.contactTint)
+                } else {
+                    Text(initials)
+                        .font(.system(size: size * 0.36, weight: .semibold))
+                        .foregroundStyle(Tokens.Color.contactTint)
+                }
             }
             .frame(width: size, height: size)
         }
     }
+
+    /// Treat the display name as anonymous when it has no letters — i.e. it's
+    /// just a phone number / email handle stand-in. Prevents avatars like "(3"
+    /// for unknown numbers.
+    private var isAnonymousName: Bool {
+        !displayName.contains { $0.isLetter }
+    }
+
     private var initials: String {
         let parts = displayName.split(separator: " ").prefix(2)
         let i = parts.compactMap { $0.first }.map(String.init).joined()
