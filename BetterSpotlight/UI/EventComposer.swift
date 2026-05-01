@@ -69,17 +69,13 @@ struct EventComposer: View {
 
             // Date / time row
             row(icon: "clock") {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 8) {
-                        DatePicker("", selection: $startDate,
-                                   displayedComponents: hasTime ? [.date, .hourAndMinute] : [.date])
-                            .labelsHidden()
-                            .datePickerStyle(.compact)
-                        Text("–").foregroundStyle(Tokens.Color.textTertiary)
-                        DatePicker("", selection: $endDate,
-                                   displayedComponents: hasTime ? [.date, .hourAndMinute] : [.date])
-                            .labelsHidden()
-                            .datePickerStyle(.compact)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 10) {
+                        DateTimePill(date: $startDate, hasTime: hasTime)
+                        Text("→")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(Tokens.Color.textTertiary)
+                        DateTimePill(date: $endDate, hasTime: hasTime)
                         Spacer()
                         Button {
                             hasTime.toggle()
@@ -272,5 +268,71 @@ private struct KindPill: View {
                 )
         }
         .buttonStyle(PressableStyle())
+    }
+}
+
+// MARK: - Custom date / time pill
+
+/// Pill-shaped date+time button. Tap to open a graphical popover with full
+/// date and time pickers. Looks consistent with the rest of the composer
+/// instead of macOS's default stepper-field DatePicker.
+private struct DateTimePill: View {
+    @Binding var date: Date
+    let hasTime: Bool
+
+    @State private var showingPopover = false
+
+    var body: some View {
+        Button { showingPopover = true } label: {
+            HStack(spacing: 6) {
+                Text(dateLabel)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Tokens.Color.textPrimary)
+                if hasTime {
+                    Text(timeLabel)
+                        .font(.system(size: 13, weight: .regular))
+                        .monospacedDigit()
+                        .foregroundStyle(Tokens.Color.textSecondary)
+                }
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Tokens.Color.textTertiary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(
+                Capsule().fill(Color.white.opacity(0.55))
+            )
+            .overlay(
+                Capsule().strokeBorder(Tokens.Color.hairline, lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(PressableStyle())
+        .popover(isPresented: $showingPopover, arrowEdge: .bottom) {
+            VStack(spacing: 12) {
+                DatePicker("", selection: $date, displayedComponents: [.date])
+                    .labelsHidden()
+                    .datePickerStyle(.graphical)
+                if hasTime {
+                    DatePicker("", selection: $date, displayedComponents: [.hourAndMinute])
+                        .labelsHidden()
+                        .datePickerStyle(.compact)
+                }
+            }
+            .padding(16)
+            .frame(width: 300)
+        }
+    }
+
+    private var dateLabel: String {
+        let f = DateFormatter()
+        f.dateFormat = "EEE, MMM d"
+        return f.string(from: date)
+    }
+
+    private var timeLabel: String {
+        let f = DateFormatter()
+        f.dateFormat = "h:mm a"
+        return f.string(from: date)
     }
 }

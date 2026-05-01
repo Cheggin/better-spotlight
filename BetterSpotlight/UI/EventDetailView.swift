@@ -218,17 +218,17 @@ private struct MeetCTA: View {
     var onAdd: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 12) {
                 if let nsImage = BundledIcon.image(named: "google-meet") {
                     Image(nsImage: nsImage)
                         .resizable()
                         .interpolation(.high)
                         .aspectRatio(contentMode: .fit)
-                        .frame(width: 28, height: 28)
+                        .frame(width: 24, height: 24)
                 } else {
                     Image(systemName: "video.fill")
-                        .font(.system(size: 18))
+                        .font(.system(size: 16))
                         .foregroundStyle(Tokens.Color.accent)
                 }
 
@@ -250,9 +250,19 @@ private struct MeetCTA: View {
                 Text(displayURL(url))
                     .font(.system(size: 11))
                     .foregroundStyle(Tokens.Color.textTertiary)
-                    .padding(.leading, 28 + 12) // align under the pill, after icon + spacing
+                    .padding(.leading, 24 + 12)
             }
         }
+        .padding(Tokens.Space.md)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: Tokens.Radius.card, style: .continuous)
+                .fill(Color.white.opacity(0.55))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Tokens.Radius.card, style: .continuous)
+                .strokeBorder(Tokens.Color.hairline, lineWidth: 0.5)
+        )
     }
 
     private var buttonTitle: String {
