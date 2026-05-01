@@ -9,6 +9,7 @@ final class SearchCoordinator: ObservableObject {
     @Published private(set) var loadingCategories: Set<SearchCategory> = []
 
     private var providers: [SearchProvider] = []
+    private var googleSession: GoogleSession?
     private var task: Task<Void, Never>?
     private var debounce: Task<Void, Never>?
     private var pollTask: Task<Void, Never>?
@@ -21,6 +22,7 @@ final class SearchCoordinator: ObservableObject {
     func attach(googleSession: GoogleSession, preferences: Preferences) {
         guard providers.isEmpty else { return }
         let start = Date()
+        self.googleSession = googleSession
         providers = [
             FileProvider(preferences: preferences),
             GmailProvider(googleSession: googleSession),
@@ -172,6 +174,7 @@ final class SearchCoordinator: ObservableObject {
                 merged.append(contentsOf: chunk)
                 self.results = self.rank(merged)
                 self.counts = self.countByCategory(self.results)
+                self.prefetchMailBodiesIfNeeded(from: chunk)
                 Log.info("search merge provider=\(label) providerMs=\(providerMs) merged=\(merged.count) totalElapsed=\(Int(Date().timeIntervalSince(searchStart) * 1_000))ms",
                          category: "timing")
             }
@@ -237,6 +240,7 @@ final class SearchCoordinator: ObservableObject {
                 merged.append(contentsOf: chunk)
                 results = rank(merged)
                 counts = countByCategory(results)
+                prefetchMailBodiesIfNeeded(from: chunk)
                 Log.info("search warm merge provider=\(label) providerMs=\(providerMs) merged=\(merged.count) totalElapsed=\(Int(Date().timeIntervalSince(warmStart) * 1_000))ms",
                          category: "timing")
             }
@@ -279,6 +283,18 @@ final class SearchCoordinator: ObservableObject {
         } else {
             loadingCategories.subtract(categories)
         }
+    }
+
+    private func prefetchMailBodiesIfNeeded(from results: [SearchResult]) {
+        guard let googleSession else { return }
+        let messages = results.compactMap { result -> MailMessage? in
+            if case .mail(let message) = result.payload { return message }
+            return nil
+        }
+        guard !messages.isEmpty else { return }
+        MailBodyCache.shared.prefetch(messages: messages,
+                                      googleSession: googleSession,
+                                      limit: 3)
     }
 
     private func rank(_ items: [SearchResult]) -> [SearchResult] {

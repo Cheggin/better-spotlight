@@ -74,7 +74,8 @@ struct MailDetailView: View {
         }
 
         do {
-            fullMessage = try await GmailAPI(session: googleSession).fetchFullMessage(id: message.id)
+            fullMessage = try await MailBodyCache.shared.fullMessage(id: message.id,
+                                                                     googleSession: googleSession)
         } catch {
             Log.warn("mail detail full fetch failed: \(error)", category: "mail")
         }
