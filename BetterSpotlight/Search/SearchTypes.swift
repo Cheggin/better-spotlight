@@ -73,6 +73,24 @@ struct SearchResult: Identifiable, Hashable {
 }
 
 extension SearchResult {
+    static func allPageTopHit(in results: [SearchResult],
+                              favoriteIDs: [String],
+                              now: Date = Date()) -> SearchResult? {
+        let favorites = Set(favoriteIDs)
+        let candidates = results.filter { !favorites.contains($0.id) }
+
+        if let urgent = candidates
+            .compactMap({ result -> (SearchResult, Double)? in
+                let priority = result.allPageTopHitPriority(now: now)
+                return priority > 0 ? (result, priority) : nil
+            })
+            .max(by: { $0.1 < $1.1 })?.0 {
+            return urgent
+        }
+
+        return candidates.first { $0.category == .calendar || $0.category == .messages }
+    }
+
     /// Intentional All-page Top Hit priority, normalized to 0...1.
     /// This is separate from generic provider search score.
     func allPageTopHitPriority(now: Date = Date()) -> Double {

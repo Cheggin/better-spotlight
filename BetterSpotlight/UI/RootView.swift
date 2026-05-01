@@ -95,8 +95,8 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .mailMutated)) { _ in
             coordinator.refresh()
         }
-        .onChange(of: coordinator.results.first?.id) { _, _ in
-            if selectedID == nil { selectedID = coordinator.results.first?.id }
+        .onChange(of: coordinator.results.map(\.id)) { _, _ in
+            syncSelectionWithVisibleResults()
         }
         .onChange(of: category) { _, _ in
             let next = sanitizedCategory(category)
@@ -105,7 +105,7 @@ struct RootView: View {
                 return
             }
             preferences.lastSearchCategory = next
-            selectedID = visibleResults.first?.id
+            syncSelectionWithVisibleResults(force: true)
             showCalendarPopover = false
             coordinator.update(query: query, category: next)
         }
@@ -115,6 +115,7 @@ struct RootView: View {
                 category = next
             } else {
                 coordinator.refresh()
+                syncSelectionWithVisibleResults(force: true)
             }
         }
         .preferredColorScheme(.light)
@@ -287,6 +288,24 @@ struct RootView: View {
     private func sanitizedCategory(_ candidate: SearchCategory) -> SearchCategory {
         let visibleTabs = preferences.tabConfiguration.visibleTabs
         return visibleTabs.contains(candidate) ? candidate : (visibleTabs.first ?? .all)
+    }
+
+    private var selectedTopHit: SearchResult? {
+        guard category == .all else { return nil }
+        return SearchResult.allPageTopHit(in: visibleResults,
+                                          favoriteIDs: preferences.favoriteIDs)
+    }
+
+    private func syncSelectionWithVisibleResults(force: Bool = false) {
+        if let hit = selectedTopHit {
+            selectedID = hit.id
+            return
+        }
+
+        let visibleIDs = Set(visibleResults.map(\.id))
+        if force || selectedID == nil || !visibleIDs.contains(selectedID!) {
+            selectedID = visibleResults.first?.id
+        }
     }
 
     private var allEvents: [CalendarEvent] {

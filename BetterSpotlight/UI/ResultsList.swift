@@ -24,20 +24,9 @@ struct ResultsList: View {
     }
 
     private var topHit: SearchResult? {
-        let candidates = displayResults.filter { !preferences.isFavorite($0.id) }
         guard category == .all else { return nil }
-
-        let now = Date()
-        if let urgent = candidates
-            .compactMap({ result -> (SearchResult, Double)? in
-                let priority = result.allPageTopHitPriority(now: now)
-                return priority > 0 ? (result, priority) : nil
-            })
-            .max(by: { $0.1 < $1.1 })?.0 {
-            return urgent
-        }
-
-        return candidates.first { $0.category == .calendar || $0.category == .messages }
+        return SearchResult.allPageTopHit(in: displayResults,
+                                          favoriteIDs: preferences.favoriteIDs)
     }
 
     private var displayedTopHit: SearchResult? {
@@ -87,7 +76,7 @@ struct ResultsList: View {
                                     onDoubleTap: onActivate,
                                     onToggleFavorite: { preferences.toggleFavorite(fav.id) }
                                 )
-                                .id(fav.id)
+                                .id(favoriteViewID(for: fav.id))
                             }
                         }
 
@@ -101,7 +90,7 @@ struct ResultsList: View {
                                     onTap: { selectedID = hit.id },
                                     onDoubleTap: onActivate
                                 )
-                                .id(hit.id)
+                                .id(topHitViewID(for: hit.id))
                             } else if shouldShowTopHitSkeleton {
                                 SectionHeader(title: "TOP HIT")
                                     .padding(.top, favorites.isEmpty ? 2 : 6)
@@ -125,7 +114,7 @@ struct ResultsList: View {
                                         onDoubleTap: onActivate,
                                         onToggleFavorite: { preferences.toggleFavorite(result.id) }
                                     )
-                                    .id(result.id)
+                                    .id(sectionRowViewID(for: result.id))
                                 }
                                 let remainingSkeletons = skeletonRemainder(for: cat, itemCount: items.count)
                                 if remainingSkeletons > 0 {
@@ -149,10 +138,32 @@ struct ResultsList: View {
             .onChange(of: selectedID) { _, new in
                 guard let id = new else { return }
                 withAnimation(.easeInOut(duration: 0.15)) {
-                    proxy.scrollTo(id, anchor: .center)
+                    proxy.scrollTo(scrollViewID(for: id), anchor: .center)
                 }
             }
         }
+    }
+
+    private func scrollViewID(for resultID: SearchResult.ID) -> String {
+        if displayedTopHit?.id == resultID {
+            return topHitViewID(for: resultID)
+        }
+        if favorites.contains(where: { $0.id == resultID }) {
+            return favoriteViewID(for: resultID)
+        }
+        return sectionRowViewID(for: resultID)
+    }
+
+    private func topHitViewID(for resultID: SearchResult.ID) -> String {
+        "top-hit-slot:\(resultID)"
+    }
+
+    private func favoriteViewID(for resultID: SearchResult.ID) -> String {
+        "favorite-row:\(resultID)"
+    }
+
+    private func sectionRowViewID(for resultID: SearchResult.ID) -> String {
+        "section-row:\(resultID)"
     }
 
     private var displayCategories: [SearchCategory] {
