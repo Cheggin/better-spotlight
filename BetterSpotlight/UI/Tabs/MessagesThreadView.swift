@@ -16,6 +16,8 @@ struct MessagesThreadView: View {
     /// would push the most recent bubbles up under the input.
     @State private var replyTick: Int = 0
 
+    private let initialThreadLimit = 80
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if let m = message {
@@ -54,24 +56,30 @@ struct MessagesThreadView: View {
     /// thread is open without forcing the user to reopen the panel.
     private func pollWhileVisible() async {
         while !Task.isCancelled, message != nil {
-            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            try? await Task.sleep(nanoseconds: 10_000_000_000)
             if Task.isCancelled { break }
-            await loadThread()
+            await loadThread(forceRefresh: true, showSpinner: false)
         }
     }
 
     // MARK: Header
 
     private func header(for m: ChatMessage) -> some View {
-        HStack(spacing: Tokens.Space.sm) {
+        // Only show the raw handle (phone / email) under the display name when
+        // it isn't a known contact — otherwise it's redundant.
+        let knownContact = ContactsProvider.contact(forHandle: m.handle) != nil
+
+        return HStack(spacing: Tokens.Space.sm) {
             ContactAvatar(handle: m.handle, displayName: m.displayName, size: 36)
             VStack(alignment: .leading, spacing: 0) {
                 Text(m.displayName)
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Tokens.Color.textPrimary)
-                Text(m.handle)
-                    .font(.system(size: 11))
-                    .foregroundStyle(Tokens.Color.textTertiary)
+                if !knownContact {
+                    Text(m.handle)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Tokens.Color.textTertiary)
+                }
             }
             Spacer()
             Button {
@@ -81,14 +89,11 @@ struct MessagesThreadView: View {
                     NSWorkspace.shared.open(url)
                 }
             } label: {
-                Text("Open")
+                Text("Open in Messages")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(Tokens.Color.accent)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 5)
-                    .background(Capsule().fill(Tokens.Color.accentSoft))
             }
-            .buttonStyle(PressableStyle())
+            .buttonStyle(.borderless)
         }
     }
 
@@ -97,7 +102,7 @@ struct MessagesThreadView: View {
     private func threadView(for selected: ChatMessage) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 6) {
+                VStack(spacing: 6) {
                     if isLoading && thread.isEmpty {
                         ProgressView().padding(.top, Tokens.Space.xl)
                     }
@@ -119,19 +124,25 @@ struct MessagesThreadView: View {
                 }
                 .padding(.horizontal, Tokens.Space.md)
                 .padding(.vertical, Tokens.Space.sm)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .scrollIndicators(.hidden)
             .onChange(of: thread.count) { _, _ in
-                withAnimation(.easeOut(duration: 0.15)) {
-                    proxy.scrollTo("bottom", anchor: .bottom)
-                }
+                scrollToBottom(proxy)
             }
             .onChange(of: replyTick) { _, _ in
                 // Reply box just changed size; re-pin the visible area to
                 // the most recent bubble.
-                withAnimation(.easeOut(duration: 0.12)) {
-                    proxy.scrollTo("bottom", anchor: .bottom)
-                }
+                scrollToBottom(proxy)
+            }
+        }
+    }
+
+    private func scrollToBottom(_ proxy: ScrollViewProxy) {
+        Task { @MainActor in
+            await Task.yield()
+            withAnimation(.easeOut(duration: 0.12)) {
+                proxy.scrollTo("bottom", anchor: .bottom)
             }
         }
     }
@@ -160,19 +171,37 @@ struct MessagesThreadView: View {
     // MARK: Loading
 
     @MainActor
-    private func loadThread() async {
+    private func loadThread(forceRefresh: Bool = false, showSpinner: Bool = true) async {
         guard let m = message else {
             thread = []
             return
         }
-        isLoading = true
+        if showSpinner && thread.isEmpty { isLoading = true }
         error = nil
         let handle = m.handle
+        let started = Date()
         do {
-            let result = try await Task.detached {
-                try MessagesProvider.fetchThread(forHandle: handle, max: 200)
-            }.value
-            thread = result
+            if !forceRefresh,
+               let cached = await MessageThreadCache.shared.cachedThread(
+                   forHandle: handle,
+                   limit: initialThreadLimit
+               ) {
+                thread = cached
+                isLoading = false
+                Log.info("message thread displayed cached count=\(cached.count) +\(Int(Date().timeIntervalSince(started) * 1_000))ms",
+                         category: "timing")
+            }
+
+            let result = try await MessageThreadCache.shared.thread(
+                forHandle: handle,
+                limit: initialThreadLimit,
+                forceRefresh: forceRefresh
+            )
+            if result != thread {
+                thread = result
+            }
+            Log.info("message thread loaded count=\(result.count) refresh=\(forceRefresh) +\(Int(Date().timeIntervalSince(started) * 1_000))ms",
+                     category: "timing")
         } catch let err as MessagesError {
             error = err.localizedDescription
             thread = []
@@ -218,13 +247,13 @@ struct MessagesReplyBox: View {
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .strokeBorder(Tokens.Color.hairline, lineWidth: 0.5)
                     )
-                    .onSubmit { send() }
-                    .onKeyPress(.space, phases: .down) { keyPress in
+                    .onKeyPress(.return, phases: .down) { keyPress in
                         if keyPress.modifiers.contains(.shift) {
                             replyText.append("\n")
                             return .handled
                         }
-                        return .ignored
+                        send()
+                        return .handled
                     }
                     .onChange(of: replyText) { _, _ in onEdit() }
 
@@ -273,18 +302,6 @@ struct MessagesReplyBox: View {
                     }
                 }
                 Spacer()
-                Button {
-                    let recipient = message.handle.addingPercentEncoding(
-                        withAllowedCharacters: .urlPathAllowed) ?? message.handle
-                    if let url = URL(string: "sms:\(recipient)") {
-                        NSWorkspace.shared.open(url)
-                    }
-                } label: {
-                    Text("Open in Messages")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Tokens.Color.accent)
-                }
-                .buttonStyle(.borderless)
             }
         }
     }
@@ -372,18 +389,8 @@ private struct AttachmentBubble: View {
 
     var body: some View {
         Group {
-            if attachment.isImage, let image = NSImage(contentsOfFile: attachment.path) {
-                Image(nsImage: image)
-                    .resizable()
-                    .interpolation(.high)
-                    .aspectRatio(contentMode: .fill)
-                    .frame(maxWidth: 230, maxHeight: 260)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .strokeBorder(Color.black.opacity(0.05), lineWidth: 0.5)
-                    )
-                    .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            if attachment.isImage {
+                AttachmentImage(path: attachment.path)
                     .onTapGesture { NSWorkspace.shared.open(URL(fileURLWithPath: attachment.path)) }
             } else {
                 HStack(spacing: 8) {
@@ -404,6 +411,71 @@ private struct AttachmentBubble: View {
                 )
                 .onTapGesture { NSWorkspace.shared.open(URL(fileURLWithPath: attachment.path)) }
             }
+        }
+    }
+}
+
+private enum AttachmentImageCache {
+    nonisolated(unsafe) static let shared = NSCache<NSString, NSImage>()
+}
+
+private struct AttachmentImage: View {
+    let path: String
+    @State private var image: NSImage?
+    @State private var failed = false
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.black.opacity(0.05))
+
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.medium)
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 230, height: 260)
+                    .clipped()
+            } else if failed {
+                Image(systemName: "photo")
+                    .font(.system(size: 22, weight: .regular))
+                    .foregroundStyle(Tokens.Color.textTertiary)
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+            }
+        }
+        .frame(width: 230, height: 260)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.black.opacity(0.05), lineWidth: 0.5)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .task(id: path) {
+            await load()
+        }
+    }
+
+    @MainActor
+    private func load() async {
+        let key = path as NSString
+        if let cached = AttachmentImageCache.shared.object(forKey: key) {
+            image = cached
+            failed = false
+            return
+        }
+
+        failed = false
+        let loaded = await Task.detached(priority: .utility) {
+            NSImage(contentsOfFile: path)
+        }.value
+
+        if let loaded {
+            AttachmentImageCache.shared.setObject(loaded, forKey: key)
+            image = loaded
+        } else {
+            failed = true
         }
     }
 }

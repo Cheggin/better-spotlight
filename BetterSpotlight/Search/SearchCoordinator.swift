@@ -197,6 +197,7 @@ final class SearchCoordinator: ObservableObject {
                 self.counts = self.countByCategory(self.results)
                 self.markLoading(providerLabel: label, isLoading: false)
                 self.prefetchMailBodiesIfNeeded(from: chunk)
+                self.prefetchMessageThreadsIfNeeded(from: chunk)
                 Log.info("search merge provider=\(label) providerMs=\(providerMs) merged=\(merged.count) totalElapsed=\(Int(Date().timeIntervalSince(searchStart) * 1_000))ms",
                          category: "timing")
             }
@@ -260,6 +261,7 @@ final class SearchCoordinator: ObservableObject {
                 counts = countByCategory(results)
                 markLoading(providerLabel: label, isLoading: false)
                 prefetchMailBodiesIfNeeded(from: chunk)
+                prefetchMessageThreadsIfNeeded(from: chunk)
                 Log.info("search warm merge provider=\(label) providerMs=\(providerMs) merged=\(merged.count) totalElapsed=\(Int(Date().timeIntervalSince(warmStart) * 1_000))ms",
                          category: "timing")
             }
@@ -349,6 +351,21 @@ final class SearchCoordinator: ObservableObject {
         MailBodyCache.shared.prefetch(messages: messages,
                                       googleSession: googleSession,
                                       limit: 2)
+    }
+
+    private func prefetchMessageThreadsIfNeeded(from results: [SearchResult]) {
+        var seen: Set<String> = []
+        let handles = results.compactMap { result -> String? in
+            guard case .message(let message) = result.payload else { return nil }
+            guard !message.handle.isEmpty, seen.insert(message.handle).inserted else { return nil }
+            return message.handle
+        }
+        guard !handles.isEmpty else { return }
+        Task {
+            await MessageThreadCache.shared.prefetch(handles: handles,
+                                                     limit: 80,
+                                                     maxCount: 4)
+        }
     }
 
     private func rank(_ items: [SearchResult]) -> [SearchResult] {
