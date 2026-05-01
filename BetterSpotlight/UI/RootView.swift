@@ -251,7 +251,11 @@ struct RootView: View {
                 DetailPane(result: nil)
             }
         default:
-            DetailPane(result: selectedResult)
+            if let m = selectedMessage {
+                MessagesThreadView(message: m)
+            } else {
+                DetailPane(result: selectedResult)
+            }
         }
     }
 
