@@ -4,7 +4,7 @@ import SwiftUI
 // MARK: - Categories
 
 enum SearchCategory: String, CaseIterable, Identifiable, Codable {
-    case all, files, folders, calendar, mail, messages, contacts
+    case all, calendar, mail, messages, files, folders, contacts
 
     var id: String { rawValue }
 
@@ -193,6 +193,7 @@ struct MailMessage: Hashable {
     let fromEmail: String
     let date: Date
     let attachments: [MailAttachment]
+    var isUnread: Bool = false
 
     var fromInitials: String {
         let parts = fromName.split(separator: " ").prefix(2)
