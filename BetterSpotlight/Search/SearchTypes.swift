@@ -48,7 +48,7 @@ enum SearchCategory: String, CaseIterable, Identifiable {
 
     /// Order in which sections show up in the results list.
     static var orderedDisplay: [SearchCategory] {
-        [.calendar, .mail, .files, .folders, .contacts, .messages]
+        [.calendar, .mail, .messages, .files, .folders, .contacts]
     }
 }
 
@@ -225,16 +225,27 @@ struct CalendarEvent: Hashable {
     let start: Date
     let end: Date
     let isAllDay: Bool
+    let description: String?
     let location: String?
     let conferenceURL: URL?
     let conferenceTitle: String?
     let attendees: [Attendee]
     let htmlLink: URL?
+    let status: String?
+    let visibility: String?
+    let transparency: String?
+    let eventType: String?
+    let organizer: Person?
+    let creator: Person?
+    let attachments: [Attachment]
+    let reminders: [Reminder]
 
     struct Attendee: Hashable, Identifiable {
         let email: String
         let displayName: String?
         let isOrganizer: Bool
+        let responseStatus: String?
+        let isSelf: Bool
         var id: String { email }
         var displayedName: String { displayName ?? email }
         var initials: String {
@@ -243,6 +254,29 @@ struct CalendarEvent: Hashable {
             let i = parts.compactMap { $0.first }.map(String.init).joined()
             return i.isEmpty ? String(email.prefix(1)).uppercased() : i.uppercased()
         }
+    }
+
+    struct Person: Hashable {
+        let email: String?
+        let displayName: String?
+    }
+
+    struct Attachment: Hashable, Identifiable {
+        let fileURL: URL?
+        let title: String?
+        let mimeType: String?
+        let iconLink: URL?
+
+        var id: String {
+            fileURL?.absoluteString ?? title ?? mimeType ?? "attachment"
+        }
+    }
+
+    struct Reminder: Hashable, Identifiable {
+        let method: String
+        let minutes: Int
+
+        var id: String { "\(method)-\(minutes)" }
     }
 
     var dateLabel: String {

@@ -116,7 +116,8 @@ struct RootView: View {
                     onActivate: openSelected,
                     query: query,
                     googleSignedIn: googleSession.isSignedIn,
-                    category: category
+                    category: category,
+                    loadingCategories: coordinator.loadingCategories
                 )
                 .environmentObject(preferences)
                 .frame(width: 340)
@@ -134,7 +135,8 @@ struct RootView: View {
                     onActivate: openSelected,
                     query: query,
                     googleSignedIn: googleSession.isSignedIn,
-                    category: category
+                    category: category,
+                    loadingCategories: coordinator.loadingCategories
                 )
                 .environmentObject(preferences)
                 .frame(width: 340)

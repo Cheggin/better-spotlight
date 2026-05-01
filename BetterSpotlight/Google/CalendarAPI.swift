@@ -169,8 +169,13 @@ struct CalendarAPI {
     private static func parseEvent(_ dict: [String: Any]) -> CalendarEvent? {
         guard let id = dict["id"] as? String else { return nil }
         let title = (dict["summary"] as? String) ?? "(no title)"
+        let description = (dict["description"] as? String).map(cleanDescription)
         let location = dict["location"] as? String
         let htmlLink = (dict["htmlLink"] as? String).flatMap(URL.init(string:))
+        let status = dict["status"] as? String
+        let visibility = dict["visibility"] as? String
+        let transparency = dict["transparency"] as? String
+        let eventType = dict["eventType"] as? String
 
         let startDict = dict["start"] as? [String: Any] ?? [:]
         let endDict   = dict["end"]   as? [String: Any] ?? [:]
@@ -205,9 +210,28 @@ struct CalendarAPI {
             CalendarEvent.Attendee(
                 email: ($0["email"] as? String) ?? "unknown",
                 displayName: $0["displayName"] as? String,
-                isOrganizer: ($0["organizer"] as? Bool) ?? false
+                isOrganizer: ($0["organizer"] as? Bool) ?? false,
+                responseStatus: $0["responseStatus"] as? String,
+                isSelf: ($0["self"] as? Bool) ?? false
             )
         }
+        let organizer = parsePerson(dict["organizer"] as? [String: Any])
+        let creator = parsePerson(dict["creator"] as? [String: Any])
+        let attachments: [CalendarEvent.Attachment] = (dict["attachments"] as? [[String: Any]] ?? []).map {
+            CalendarEvent.Attachment(
+                fileURL: ($0["fileUrl"] as? String).flatMap(URL.init(string:)),
+                title: $0["title"] as? String,
+                mimeType: $0["mimeType"] as? String,
+                iconLink: ($0["iconLink"] as? String).flatMap(URL.init(string:))
+            )
+        }
+        let reminderDict = dict["reminders"] as? [String: Any] ?? [:]
+        let reminders: [CalendarEvent.Reminder] =
+            (reminderDict["overrides"] as? [[String: Any]] ?? []).compactMap {
+                guard let method = $0["method"] as? String,
+                      let minutes = $0["minutes"] as? Int else { return nil }
+                return CalendarEvent.Reminder(method: method, minutes: minutes)
+            }
 
         return CalendarEvent(
             id: id,
@@ -215,12 +239,45 @@ struct CalendarAPI {
             start: start,
             end: end,
             isAllDay: isAllDay,
+            description: description,
             location: location,
             conferenceURL: conferenceURL,
             conferenceTitle: conferenceTitle,
             attendees: attendees,
-            htmlLink: htmlLink
+            htmlLink: htmlLink,
+            status: status,
+            visibility: visibility,
+            transparency: transparency,
+            eventType: eventType,
+            organizer: organizer,
+            creator: creator,
+            attachments: attachments,
+            reminders: reminders
         )
+    }
+
+    private static func parsePerson(_ dict: [String: Any]?) -> CalendarEvent.Person? {
+        guard let dict else { return nil }
+        return CalendarEvent.Person(
+            email: dict["email"] as? String,
+            displayName: dict["displayName"] as? String
+        )
+    }
+
+    private static func cleanDescription(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "(?is)<(script|style)[^>]*>.*?</\\1>",
+                                  with: " ",
+                                  options: .regularExpression)
+            .replacingOccurrences(of: "(?i)<br\\s*/?>|</p>|</div>|</li>",
+                                  with: "\n",
+                                  options: .regularExpression)
+            .replacingOccurrences(of: "(?s)<[^>]+>",
+                                  with: " ",
+                                  options: .regularExpression)
+            .replacingOccurrences(of: "\u{00a0}", with: " ")
+            .replacingOccurrences(of: "[ \\t\\r\\n]+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func parseEventTime(_ dict: [String: Any]) -> Date? {

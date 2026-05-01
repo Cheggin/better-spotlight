@@ -6,6 +6,7 @@ final class SearchCoordinator: ObservableObject {
     @Published private(set) var results: [SearchResult] = []
     @Published private(set) var counts: [SearchCategory: Int] = [:]
     @Published private(set) var isLoading: Bool = false
+    @Published private(set) var loadingCategories: Set<SearchCategory> = []
 
     private var providers: [SearchProvider] = []
     private var task: Task<Void, Never>?
@@ -38,6 +39,11 @@ final class SearchCoordinator: ObservableObject {
         task?.cancel()
         warmTask?.cancel()
         providers.forEach { $0.cancel() }
+        loadingCategories.removeAll()
+        if query.isEmpty {
+            markLoading(category == .all ? providers : providersFor(category: category, query: query),
+                        isLoading: true)
+        }
 
         debounce = Task { [weak self] in
             let debounceStart = Date()
@@ -129,10 +135,12 @@ final class SearchCoordinator: ObservableObject {
         lastQuery = query
         lastCategory = category
         let activeProviders = providersFor(category: category, query: query)
+        markLoading(activeProviders, isLoading: true)
         Log.info("search run begin query='\(query)' category=\(category.title) providers=\(activeProviders.count)",
                  category: "timing")
         defer {
             isLoading = false
+            markLoading(activeProviders, isLoading: false)
             Log.info("search run complete query='\(query)' category=\(category.title) total=\(results.count) +\(Int(Date().timeIntervalSince(searchStart) * 1_000))ms",
                      category: "timing")
         }
@@ -179,6 +187,7 @@ final class SearchCoordinator: ObservableObject {
         let activeIDs = Set(activeProviders.map(ObjectIdentifier.init))
         let warmProviders = providers.filter { activeIDs.contains(ObjectIdentifier($0)) == false }
         guard !warmProviders.isEmpty else { return }
+        markLoading(warmProviders, isLoading: true)
 
         warmTask = Task { [weak self, warmProviders] in
             try? await Task.sleep(nanoseconds: 700_000_000)
@@ -193,6 +202,7 @@ final class SearchCoordinator: ObservableObject {
         let warmStart = Date()
         Log.info("search warm begin source=\(sourceCategory.title) providers=\(warmProviders.count)",
                  category: "timing")
+        defer { markLoading(warmProviders, isLoading: false) }
         var merged = results
         await withTaskGroup(of: (String, [SearchResult], Int).self) { group in
             for provider in warmProviders {
@@ -258,6 +268,17 @@ final class SearchCoordinator: ObservableObject {
             provider.category == .files ? [.files, .folders] : [provider.category]
         })
         return results.filter { activeCategories.contains($0.category) == false }
+    }
+
+    private func markLoading(_ providers: [SearchProvider], isLoading: Bool) {
+        let categories = Set(providers.flatMap { provider -> [SearchCategory] in
+            provider.category == .files ? [.files, .folders] : [provider.category]
+        })
+        if isLoading {
+            loadingCategories.formUnion(categories)
+        } else {
+            loadingCategories.subtract(categories)
+        }
     }
 
     private func rank(_ items: [SearchResult]) -> [SearchResult] {

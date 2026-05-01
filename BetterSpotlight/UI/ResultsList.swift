@@ -7,6 +7,7 @@ struct ResultsList: View {
     var query: String = ""
     var googleSignedIn: Bool = false
     var category: SearchCategory = .all
+    var loadingCategories: Set<SearchCategory> = []
     @EnvironmentObject var preferences: Preferences
 
     private var favorites: [SearchResult] {
@@ -40,15 +41,20 @@ struct ResultsList: View {
         let cap = (category == .all) ? 3 : Int.max
         return SearchCategory.orderedDisplay.compactMap { cat in
             let inCat = tail.filter { $0.category == cat }.prefix(cap)
-            return inCat.isEmpty ? nil : (cat, Array(inCat))
+            if inCat.isEmpty, !shouldShowSkeletonSection(for: cat) { return nil }
+            return (cat, Array(inCat))
         }
+    }
+
+    private var isShowingSkeletons: Bool {
+        query.isEmpty && !loadingCategories.isEmpty
     }
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
-                    if results.isEmpty {
+                    if results.isEmpty && !isShowingSkeletons {
                         EmptyResultsView(query: query,
                                          googleSignedIn: googleSignedIn,
                                          category: category)
@@ -82,27 +88,37 @@ struct ResultsList: View {
                                 onDoubleTap: onActivate
                             )
                             .id(hit.id)
+                        } else if shouldShowTopHitSkeleton {
+                            SectionHeader(title: "TOP HIT")
+                                .padding(.top, favorites.isEmpty ? 2 : 6)
+                            TopHitSkeletonCard()
                         }
 
                         // Remaining results grouped by category.
                         ForEach(groupedTail, id: \.0) { (cat, items) in
                             SectionHeader(title: sectionHeaderTitle(for: cat))
                                 .padding(.top, 6)
-                            ForEach(items) { result in
-                                ResultRow(
-                                    result: result,
-                                    isSelected: selectedID == result.id,
-                                    isFavorite: preferences.isFavorite(result.id),
-                                    onTap: { selectedID = result.id },
-                                    onDoubleTap: onActivate,
-                                    onToggleFavorite: { preferences.toggleFavorite(result.id) }
-                                )
-                                .id(result.id)
+                            if items.isEmpty {
+                                SkeletonRows(category: cat, count: skeletonCount(for: cat))
+                            } else {
+                                ForEach(items) { result in
+                                    ResultRow(
+                                        result: result,
+                                        isSelected: selectedID == result.id,
+                                        isFavorite: preferences.isFavorite(result.id),
+                                        onTap: { selectedID = result.id },
+                                        onDoubleTap: onActivate,
+                                        onToggleFavorite: { preferences.toggleFavorite(result.id) }
+                                    )
+                                    .id(result.id)
+                                }
                             }
 
                             // Inline "Search in <category>" / "View Calendar" affordance
                             // after each category list, matching reference.
-                            inlineCTA(for: cat)
+                            if !items.isEmpty {
+                                inlineCTA(for: cat)
+                            }
                         }
                     }
                     Spacer().frame(height: Tokens.Space.md)
@@ -123,6 +139,22 @@ struct ResultsList: View {
     private func sectionHeaderTitle(for cat: SearchCategory) -> String {
         // Reference renames CALENDAR → EVENTS in the result list.
         cat == .calendar ? "EVENTS" : cat.uppercaseTitle
+    }
+
+    private var shouldShowTopHitSkeleton: Bool {
+        category == .all && query.isEmpty && results.isEmpty && isShowingSkeletons
+    }
+
+    private func shouldShowSkeletonSection(for cat: SearchCategory) -> Bool {
+        guard query.isEmpty, loadingCategories.contains(cat) else { return false }
+        return category == .all || category == cat
+    }
+
+    private func skeletonCount(for cat: SearchCategory) -> Int {
+        switch cat {
+        case .contacts: return 2
+        default: return category == .all ? 2 : 4
+        }
     }
 
     @ViewBuilder
@@ -233,6 +265,23 @@ private struct TopHitCard: View {
     }
 }
 
+private struct TopHitSkeletonCard: View {
+    var body: some View {
+        HStack(spacing: 10) {
+            SkeletonBlock(width: 26, height: 26, cornerRadius: 13)
+            VStack(alignment: .leading, spacing: 5) {
+                SkeletonBlock(width: 170, height: 12, cornerRadius: 4)
+                SkeletonBlock(width: 230, height: 9, cornerRadius: 4)
+            }
+            Spacer(minLength: 4)
+            SkeletonBlock(width: 18, height: 18, cornerRadius: 5)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .accessibilityHidden(true)
+    }
+}
+
 // MARK: - Plain section header
 
 private struct SectionHeader: View {
@@ -244,6 +293,62 @@ private struct SectionHeader: View {
             .foregroundStyle(Tokens.Color.textTertiary)
             .padding(.horizontal, Tokens.Space.xs)
             .padding(.bottom, 2)
+    }
+}
+
+private struct SkeletonRows: View {
+    let category: SearchCategory
+    let count: Int
+
+    var body: some View {
+        VStack(spacing: 2) {
+            ForEach(0..<count, id: \.self) { index in
+                HStack(spacing: 8) {
+                    SkeletonBlock(width: 22, height: 22, cornerRadius: category == .messages ? 11 : 6)
+                    VStack(alignment: .leading, spacing: 4) {
+                        SkeletonBlock(width: titleWidth(for: index), height: 10, cornerRadius: 4)
+                        SkeletonBlock(width: subtitleWidth(for: index), height: 8, cornerRadius: 4)
+                    }
+                    Spacer(minLength: 4)
+                    SkeletonBlock(width: 38, height: 9, cornerRadius: 4)
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
+    private func titleWidth(for index: Int) -> CGFloat {
+        switch category {
+        case .calendar: return index == 0 ? 150 : 112
+        case .mail: return index == 0 ? 190 : 138
+        case .files, .folders: return index == 0 ? 160 : 120
+        case .contacts: return index == 0 ? 130 : 96
+        case .messages: return index == 0 ? 118 : 150
+        case .all: return 130
+        }
+    }
+
+    private func subtitleWidth(for index: Int) -> CGFloat {
+        index == 0 ? 220 : 176
+    }
+}
+
+private struct SkeletonBlock: View {
+    let width: CGFloat
+    let height: CGFloat
+    let cornerRadius: CGFloat
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(Tokens.Color.textTertiary.opacity(0.14))
+            .frame(width: width, height: height)
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(Color.white.opacity(0.20))
+                    .blendMode(.plusLighter)
+            )
     }
 }
 

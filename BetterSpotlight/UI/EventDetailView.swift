@@ -31,18 +31,15 @@ struct EventDetailView: View {
                     DetailRow(icon: "clock",
                               tint: Tokens.Color.calendarTint,
                               label: event.timeLabel)
-                    if let loc = event.location {
-                        DetailRow(icon: "mappin.and.ellipse",
-                                  tint: Tokens.Color.calendarTint,
-                                  label: loc)
-                    }
-                    if let conf = event.conferenceTitle {
-                        DetailRow(icon: "video.fill",
-                                  tint: Tokens.Color.calendarTint,
-                                  label: conf)
-                    }
+                    DetailRow(icon: "mappin.and.ellipse",
+                              tint: Tokens.Color.calendarTint,
+                              label: event.location.nilIfBlank ?? "No location")
+                    DetailRow(icon: "video.fill",
+                              tint: Tokens.Color.calendarTint,
+                              label: event.conferenceTitle.nilIfBlank ?? "No video call")
                 }
                 .padding(Tokens.Space.md)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .background(
                     RoundedRectangle(cornerRadius: Tokens.Radius.card, style: .continuous)
                         .fill(Tokens.Color.surfaceRaised)
@@ -65,14 +62,24 @@ struct EventDetailView: View {
                         .foregroundStyle(.red)
                 }
 
+                // ── Description ──
+                DetailSection(title: "DESCRIPTION") {
+                    Text(event.description.nilIfBlank ?? "No description")
+                        .font(Tokens.Typeface.body)
+                        .foregroundStyle(event.description.nilIfBlank == nil
+                                         ? Tokens.Color.textTertiary
+                                         : Tokens.Color.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
                 // ── Attendees ──
-                if !event.attendees.isEmpty {
-                    VStack(alignment: .leading, spacing: Tokens.Space.xs) {
-                        Text("ATTENDING")
-                            .font(Tokens.Typeface.micro)
-                            .tracking(0.7)
+                DetailSection(title: "ATTENDING") {
+                    if event.attendees.isEmpty {
+                        Text("No guests")
+                            .font(Tokens.Typeface.body)
                             .foregroundStyle(Tokens.Color.textTertiary)
-                        VStack(spacing: 6) {
+                    } else {
+                        VStack(alignment: .leading, spacing: 6) {
                             ForEach(event.attendees.prefix(5)) { person in
                                 AttendeeRow(person: person)
                             }
@@ -86,8 +93,32 @@ struct EventDetailView: View {
                     }
                 }
 
+                DetailSection(title: "DETAILS") {
+                    VStack(alignment: .leading, spacing: Tokens.Space.sm) {
+                        MetadataRow(label: "Organizer", value: displayPerson(event.organizer))
+                        MetadataRow(label: "Creator", value: displayPerson(event.creator))
+                        MetadataRow(label: "Status", value: event.status.nilIfBlank ?? "Unknown")
+                        MetadataRow(label: "Visibility", value: event.visibility.nilIfBlank ?? "Default")
+                        MetadataRow(label: "Availability", value: availabilityLabel)
+                        MetadataRow(label: "Type", value: event.eventType.nilIfBlank ?? "Default")
+                        MetadataRow(label: "Reminders", value: remindersLabel)
+                        MetadataRow(label: "Attachments", value: attachmentsLabel)
+                        if let htmlLink = event.htmlLink {
+                            Button {
+                                NSWorkspace.shared.open(htmlLink)
+                            } label: {
+                                Label("Open in Google Calendar", systemImage: "arrow.up.right.square")
+                                    .font(.system(size: 12, weight: .semibold))
+                            }
+                            .buttonStyle(.borderless)
+                            .foregroundStyle(Tokens.Color.accent)
+                        }
+                    }
+                }
+
                 Spacer(minLength: 0)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollIndicators(.hidden)
     }
@@ -114,6 +145,69 @@ struct EventDetailView: View {
                 }
             }
         }
+    }
+
+    private var availabilityLabel: String {
+        switch event.transparency {
+        case "transparent": return "Free"
+        case "opaque": return "Busy"
+        default: return "Busy"
+        }
+    }
+
+    private var remindersLabel: String {
+        guard !event.reminders.isEmpty else { return "Default reminders" }
+        return event.reminders
+            .map { "\($0.method.capitalized) \(formatReminderMinutes($0.minutes))" }
+            .joined(separator: ", ")
+    }
+
+    private var attachmentsLabel: String {
+        guard !event.attachments.isEmpty else { return "No attachments" }
+        return "\(event.attachments.count) attachment\(event.attachments.count == 1 ? "" : "s")"
+    }
+
+    private func displayPerson(_ person: CalendarEvent.Person?) -> String {
+        guard let person else { return "Unknown" }
+        return person.displayName.nilIfBlank ?? person.email.nilIfBlank ?? "Unknown"
+    }
+
+    private func formatReminderMinutes(_ minutes: Int) -> String {
+        if minutes == 0 { return "at start" }
+        if minutes < 60 { return "\(minutes)m before" }
+        if minutes % 1_440 == 0 { return "\(minutes / 1_440)d before" }
+        if minutes % 60 == 0 { return "\(minutes / 60)h before" }
+        return "\(minutes)m before"
+    }
+}
+
+private struct DetailSection<Content: View>: View {
+    let title: String
+    let content: () -> Content
+
+    init(title: String, @ViewBuilder content: @escaping () -> Content) {
+        self.title = title
+        self.content = content
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Tokens.Space.xs) {
+            Text(title)
+                .font(Tokens.Typeface.micro)
+                .tracking(0.7)
+                .foregroundStyle(Tokens.Color.textTertiary)
+            content()
+        }
+        .padding(Tokens.Space.md)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: Tokens.Radius.card, style: .continuous)
+                .fill(Color.white.opacity(0.55))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Tokens.Radius.card, style: .continuous)
+                .strokeBorder(Tokens.Color.hairline, lineWidth: 0.5)
+        )
     }
 }
 
@@ -191,6 +285,26 @@ private struct DetailRow: View {
             Text(label)
                 .font(Tokens.Typeface.body)
                 .foregroundStyle(Tokens.Color.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+private struct MetadataRow: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: Tokens.Space.sm) {
+            Text(label)
+                .font(Tokens.Typeface.caption)
+                .foregroundStyle(Tokens.Color.textTertiary)
+                .frame(width: 80, alignment: .leading)
+            Text(value)
+                .font(Tokens.Typeface.caption)
+                .foregroundStyle(Tokens.Color.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
         }
     }
 }
@@ -216,8 +330,8 @@ private struct AttendeeRow: View {
                     .foregroundStyle(Tokens.Color.textTertiary)
             }
             Spacer()
-            if person.isOrganizer {
-                Text("Organizer")
+            if let badge = badgeText {
+                Text(badge)
                     .font(Tokens.Typeface.micro)
                     .tracking(0.5)
                     .foregroundStyle(Tokens.Color.textTertiary)
@@ -226,5 +340,24 @@ private struct AttendeeRow: View {
                     .background(Capsule().fill(Tokens.Color.surfaceSunken))
             }
         }
+    }
+
+    private var badgeText: String? {
+        if person.isSelf { return "You" }
+        if person.isOrganizer { return "Organizer" }
+        switch person.responseStatus {
+        case "accepted": return "Accepted"
+        case "declined": return "Declined"
+        case "tentative": return "Maybe"
+        default: return nil
+        }
+    }
+}
+
+private extension Optional where Wrapped == String {
+    var nilIfBlank: String? {
+        guard let value = self?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else { return nil }
+        return value
     }
 }
