@@ -8,11 +8,12 @@ struct SettingsView: View {
     @State private var tab: Tab = .general
 
     enum Tab: String, CaseIterable {
-        case general, google, folders, messages
+        case general, tabs, google, folders, messages
         var title: String { rawValue.capitalized }
         var symbol: String {
             switch self {
             case .general:  return "gearshape"
+            case .tabs:     return "rectangle.3.group"
             case .google:   return "person.crop.circle.badge.checkmark"
             case .folders:  return "folder"
             case .messages: return "bubble.left.and.bubble.right"
@@ -55,10 +56,128 @@ struct SettingsView: View {
     private var content: some View {
         switch tab {
         case .general:  generalContent
+        case .tabs:     tabsContent
         case .google:   googleContent
         case .folders:  foldersContent
         case .messages: messagesContent
         }
+    }
+
+    private var tabsContent: some View {
+        VStack(alignment: .leading, spacing: Tokens.Space.md) {
+            SectionCard(title: "Visible tabs") {
+                VStack(spacing: 4) {
+                    ForEach(SearchCategory.tabConfigurable, id: \.self) { category in
+                        tabVisibilityRow(for: category)
+                    }
+                }
+            }
+            SectionCard(title: "All view") {
+                VStack(spacing: 4) {
+                    ForEach(SearchCategory.orderedDisplay, id: \.self) { category in
+                        allCategoryRow(for: category)
+                    }
+                }
+            }
+            Button {
+                preferences.resetTabConfiguration()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.counterclockwise")
+                    Text("Reset tab layout")
+                }
+                .font(.system(size: 12, weight: .medium))
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(Tokens.Color.accent)
+            Spacer()
+        }
+    }
+
+    private func tabVisibilityRow(for category: SearchCategory) -> some View {
+        let config = preferences.tabConfiguration.normalized
+        let isVisible = config.visibleTabs.contains(category)
+        let index = config.visibleTabs.firstIndex(of: category)
+        let canMoveUp = category != .all && (index ?? 0) > 1
+        let canMoveDown = category != .all
+            && index != nil
+            && index! < config.visibleTabs.count - 1
+
+        return HStack(spacing: Tokens.Space.sm) {
+            Image(systemName: category.iconName)
+                .foregroundStyle(category.tint)
+                .frame(width: 18)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(category.title)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Tokens.Color.textPrimary)
+                Text(category == .all ? "Always visible" : (isVisible ? "Shown in toolbar" : "Search only"))
+                    .font(.system(size: 10))
+                    .foregroundStyle(Tokens.Color.textTertiary)
+            }
+
+            Spacer()
+
+            if category != .all, isVisible {
+                HStack(spacing: 2) {
+                    Button {
+                        preferences.moveVisibleTab(category, by: -1)
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .frame(width: 22, height: 22)
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(!canMoveUp)
+                    .help("Move left")
+
+                    Button {
+                        preferences.moveVisibleTab(category, by: 1)
+                    } label: {
+                        Image(systemName: "chevron.right")
+                            .frame(width: 22, height: 22)
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(!canMoveDown)
+                    .help("Move right")
+                }
+                .foregroundStyle(Tokens.Color.textSecondary)
+            }
+
+            Toggle("", isOn: Binding(
+                get: { category == .all || preferences.tabConfiguration.visibleTabs.contains(category) },
+                set: { preferences.setTab(category, visible: $0) }
+            ))
+            .toggleStyle(.switch)
+            .labelsHidden()
+            .disabled(category == .all)
+        }
+        .padding(.vertical, 5)
+        .padding(.horizontal, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(isVisible ? Tokens.Color.surfaceSunken.opacity(0.65) : .clear)
+        )
+    }
+
+    private func allCategoryRow(for category: SearchCategory) -> some View {
+        HStack(spacing: Tokens.Space.sm) {
+            Image(systemName: category.iconName)
+                .foregroundStyle(category.tint)
+                .frame(width: 18)
+            Text(category.title)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Tokens.Color.textPrimary)
+            Spacer()
+            Toggle("", isOn: Binding(
+                get: { preferences.tabConfiguration.normalized.allCategories.contains(category) },
+                set: { preferences.setAllCategory(category, included: $0) }
+            ))
+            .toggleStyle(.switch)
+            .labelsHidden()
+        }
+        .padding(.vertical, 5)
+        .padding(.horizontal, 6)
     }
 
     private var messagesContent: some View {

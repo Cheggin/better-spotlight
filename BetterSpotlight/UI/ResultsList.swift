@@ -12,7 +12,8 @@ struct ResultsList: View {
 
     private var displayResults: [SearchResult] {
         guard category == .all else { return results }
-        return results.filter { Self.allVisibleCategories.contains($0.category) }
+        let allowed = Set(displayCategories)
+        return results.filter { allowed.contains($0.category) }
     }
 
     private var favorites: [SearchResult] {
@@ -152,13 +153,10 @@ struct ResultsList: View {
         }
     }
 
-    private static let allVisibleCategories: Set<SearchCategory> = [
-        .calendar, .mail, .messages,
-    ]
-
     private var displayCategories: [SearchCategory] {
-        category == .all
-            ? [.calendar, .mail, .messages]
+        guard category == .all else { return SearchCategory.orderedDisplay }
+        return query.isEmpty
+            ? preferences.tabConfiguration.normalized.allCategories
             : SearchCategory.orderedDisplay
     }
 

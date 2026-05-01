@@ -22,6 +22,7 @@ struct RootView: View {
 
             CategoryTabs(
                 selection: $category,
+                categories: preferences.tabConfiguration.visibleTabs,
                 counts: coordinator.counts,
                 timeRange: $coordinator.timeRange
             )
@@ -72,7 +73,7 @@ struct RootView: View {
         .onAppear {
             let start = Date()
             Log.info("root onAppear begin", category: "timing")
-            category = preferences.lastSearchCategory
+            category = sanitizedCategory(preferences.lastSearchCategory)
             Log.info("root restored category=\(category.title) +\(Int(Date().timeIntervalSince(start) * 1_000))ms",
                      category: "timing")
             coordinator.attach(googleSession: googleSession, preferences: preferences)
@@ -95,10 +96,23 @@ struct RootView: View {
             if selectedID == nil { selectedID = coordinator.results.first?.id }
         }
         .onChange(of: category) { _, _ in
-            preferences.lastSearchCategory = category
+            let next = sanitizedCategory(category)
+            if next != category {
+                category = next
+                return
+            }
+            preferences.lastSearchCategory = next
             selectedID = visibleResults.first?.id
             showCalendarPopover = false
-            coordinator.update(query: query, category: category)
+            coordinator.update(query: query, category: next)
+        }
+        .onChange(of: preferences.tabConfiguration) { _, _ in
+            let next = sanitizedCategory(category)
+            if next != category {
+                category = next
+            } else {
+                coordinator.refresh()
+            }
         }
         .preferredColorScheme(.light)
         .background(Color.clear)
@@ -265,6 +279,11 @@ struct RootView: View {
             }
         }
         return base
+    }
+
+    private func sanitizedCategory(_ candidate: SearchCategory) -> SearchCategory {
+        let visibleTabs = preferences.tabConfiguration.visibleTabs
+        return visibleTabs.contains(candidate) ? candidate : (visibleTabs.first ?? .all)
     }
 
     private var allEvents: [CalendarEvent] {

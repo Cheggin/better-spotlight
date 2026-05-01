@@ -2,12 +2,13 @@ import SwiftUI
 
 struct CategoryTabs: View {
     @Binding var selection: SearchCategory
+    var categories: [SearchCategory]
     var counts: [SearchCategory: Int]
     @Binding var timeRange: SearchCoordinator.TimeRange
 
     var body: some View {
         HStack(spacing: 4) {
-            ForEach(SearchCategory.allCases) { cat in
+            ForEach(categories) { cat in
                 CategoryChip(
                     category: cat,
                     isSelected: cat == selection,

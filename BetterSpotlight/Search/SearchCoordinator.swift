@@ -14,6 +14,7 @@ final class SearchCoordinator: ObservableObject {
     private var debounce: Task<Void, Never>?
     private var pollTask: Task<Void, Never>?
     private var warmTask: Task<Void, Never>?
+    private weak var preferences: Preferences?
 
     /// Filter applied after providers return.
     enum TimeRange: String { case today, week, month, all }
@@ -22,6 +23,7 @@ final class SearchCoordinator: ObservableObject {
     func attach(googleSession: GoogleSession, preferences: Preferences) {
         guard providers.isEmpty else { return }
         let start = Date()
+        self.preferences = preferences
         self.googleSession = googleSession
         providers = [
             FileProvider(preferences: preferences),
@@ -61,7 +63,8 @@ final class SearchCoordinator: ObservableObject {
     func filtered(for category: SearchCategory) -> [SearchResult] {
         let timeFiltered = applyTimeRange(results)
         guard category != .all else {
-            return timeFiltered.filter { Self.allVisibleCategories.contains($0.category) }
+            guard lastQuery.isEmpty else { return timeFiltered }
+            return timeFiltered.filter { allDefaultCategories.contains($0.category) }
         }
         switch category {
         case .files:    return timeFiltered.filter { $0.category == .files }
@@ -131,9 +134,11 @@ final class SearchCoordinator: ObservableObject {
 
     private(set) var lastQuery: String = ""
     private(set) var lastCategory: SearchCategory = .all
-    private static let allVisibleCategories: Set<SearchCategory> = [
-        .calendar, .mail, .messages,
-    ]
+
+    private var allDefaultCategories: Set<SearchCategory> {
+        Set(preferences?.tabConfiguration.normalized.allCategories
+            ?? TabConfiguration.defaultAllCategories)
+    }
 
     private func run(query: String, category: SearchCategory) async {
         let searchStart = Date()
@@ -258,9 +263,7 @@ final class SearchCoordinator: ObservableObject {
         guard query.isEmpty else { return providers }
         switch category {
         case .all:
-            return providers.filter {
-                $0.category == .calendar || $0.category == .mail || $0.category == .messages
-            }
+            return providers.filter { provider($0, matchesAny: allDefaultCategories) }
         case .files, .folders:
             return providers.filter { $0.category == .files }
         case .mail:
@@ -277,6 +280,14 @@ final class SearchCoordinator: ObservableObject {
             provider.category == .files ? [.files, .folders] : [provider.category]
         })
         return results.filter { activeCategories.contains($0.category) == false }
+    }
+
+    private func provider(_ provider: SearchProvider,
+                          matchesAny categories: Set<SearchCategory>) -> Bool {
+        if provider.category == .files {
+            return categories.contains(.files) || categories.contains(.folders)
+        }
+        return categories.contains(provider.category)
     }
 
     private func result(_ result: SearchResult, belongsToProviderLabel label: String) -> Bool {

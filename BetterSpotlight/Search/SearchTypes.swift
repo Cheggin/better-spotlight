@@ -3,7 +3,7 @@ import SwiftUI
 
 // MARK: - Categories
 
-enum SearchCategory: String, CaseIterable, Identifiable {
+enum SearchCategory: String, CaseIterable, Identifiable, Codable {
     case all, files, folders, calendar, mail, messages, contacts
 
     var id: String { rawValue }
@@ -49,6 +49,10 @@ enum SearchCategory: String, CaseIterable, Identifiable {
     /// Order in which sections show up in the results list.
     static var orderedDisplay: [SearchCategory] {
         [.calendar, .mail, .messages, .files, .folders, .contacts]
+    }
+
+    static var tabConfigurable: [SearchCategory] {
+        [.all, .calendar, .mail, .messages, .contacts, .files, .folders]
     }
 }
 
