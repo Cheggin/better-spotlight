@@ -70,7 +70,7 @@ final class SearchCoordinator: ObservableObject {
         case .files:    return timeFiltered.filter { $0.category == .files }
         case .folders:  return timeFiltered.filter { $0.category == .folders }
         case .calendar: return timeFiltered.filter { $0.category == .calendar }
-        case .mail:     return timeFiltered.filter { $0.category == .mail }
+        case .mail:     return sortedByRecency(timeFiltered.filter { $0.category == .mail })
         case .messages: return timeFiltered.filter { $0.category == .messages }
         case .contacts: return timeFiltered.filter { $0.category == .contacts }
         case .all:      return timeFiltered
@@ -104,6 +104,15 @@ final class SearchCoordinator: ObservableObject {
                 return m.contains(d)
             case .all: return true
             }
+        }
+    }
+
+    private func sortedByRecency(_ items: [SearchResult]) -> [SearchResult] {
+        items.sorted { lhs, rhs in
+            let lhsDate = date(for: lhs) ?? .distantPast
+            let rhsDate = date(for: rhs) ?? .distantPast
+            if lhsDate != rhsDate { return lhsDate > rhsDate }
+            return lhs.id < rhs.id
         }
     }
 

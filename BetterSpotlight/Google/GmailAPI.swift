@@ -47,7 +47,10 @@ struct GmailAPI {
             }
             var out: [MailMessage] = []
             for try await msg in group { if let m = msg { out.append(m) } }
-            out.sort { $0.date > $1.date }
+            out.sort {
+                if $0.date != $1.date { return $0.date > $1.date }
+                return $0.id < $1.id
+            }
             Log.info("gmail search complete q='\(trimmed)' count=\(out.count) mode=\(mode) +\(Int(Date().timeIntervalSince(searchStart) * 1_000))ms",
                      category: "timing")
             return out
@@ -93,7 +96,9 @@ struct GmailAPI {
             }
         }
         let (fromName, fromEmail) = parseFrom(fromRaw)
-        let date = dateRaw.flatMap(parseRFC822) ?? Date()
+        let date = Self.parseInternalDate(json["internalDate"])
+            ?? dateRaw.flatMap(parseRFC822)
+            ?? .distantPast
         let extracted = mode == .full
             ? Self.extractPayload(payload)
             : (bodyPreview: snippet, htmlBody: nil, attachments: [])
@@ -138,6 +143,19 @@ struct GmailAPI {
             if let d = f.date(from: s) { return d }
         }
         return nil
+    }
+
+    private static func parseInternalDate(_ value: Any?) -> Date? {
+        let milliseconds: Double?
+        if let string = value as? String {
+            milliseconds = Double(string)
+        } else if let number = value as? NSNumber {
+            milliseconds = number.doubleValue
+        } else {
+            milliseconds = nil
+        }
+        guard let milliseconds else { return nil }
+        return Date(timeIntervalSince1970: milliseconds / 1_000)
     }
 
     nonisolated private static func extractPayload(_ payload: [String: Any])
