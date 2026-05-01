@@ -41,30 +41,69 @@ struct MailDetailView: View {
                             .foregroundStyle(Tokens.Color.textTertiary)
                     }
                     Spacer()
-                    if !trashed {
-                        Button {
-                            Task {
-                                await runMutation { try await GmailAPI(session: googleSession).trash(id: displayMessage.id) }
-                                await MainActor.run { trashed = true }
+                    HStack(spacing: 4) {
+                        let isRead = !displayMessage.isUnread || locallyRead
+                        if isRead {
+                            // Already read — show a disabled checkmark with a
+                            // "Read" tooltip so the slot stays consistent.
+                            MailToolbarIcon(
+                                icon: "envelope.open",
+                                tooltip: "Read",
+                                tint: Tokens.Color.textTertiary.opacity(0.5),
+                                disabled: true
+                            ) {}
+                        } else {
+                            MailToolbarIcon(
+                                icon: "envelope.open",
+                                tooltip: "Mark as read",
+                                disabled: false
+                            ) {
+                                locallyRead = true
+                                Task {
+                                    do {
+                                        try await GmailAPI(session: googleSession).markAsRead(id: displayMessage.id)
+                                        NotificationCenter.default.post(name: .mailMutated, object: nil)
+                                    } catch {
+                                        Log.warn("mail mark-read failed: \(error)", category: "mail")
+                                        await MainActor.run {
+                                            locallyRead = false
+                                            mutationError = error.localizedDescription
+                                        }
+                                    }
+                                }
                             }
-                        } label: {
-                            Image(systemName: "trash")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(Tokens.Color.textTertiary)
-                                .frame(width: 22, height: 22)
                         }
-                        .buttonStyle(.borderless)
-                        .help("Move to Trash")
-                        .disabled(mutating)
-                    } else {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.green)
-                            .frame(width: 22, height: 22)
+                        MailToolbarIcon(
+                            icon: trashed ? "checkmark" : "trash",
+                            tooltip: "Move to Trash",
+                            tint: trashed ? .green : Tokens.Color.textTertiary,
+                            disabled: mutating || trashed
+                        ) {
+                            trashed = true
+                            Task {
+                                do {
+                                    try await GmailAPI(session: googleSession).trash(id: displayMessage.id)
+                                    NotificationCenter.default.post(name: .mailMutated, object: nil)
+                                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                                    await MainActor.run { trashed = false }
+                                } catch {
+                                    Log.warn("mail trash failed: \(error)", category: "mail")
+                                    await MainActor.run {
+                                        trashed = false
+                                        mutationError = error.localizedDescription
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 
-                mailActions(for: displayMessage)
+                if let err = mutationError {
+                    Text(err)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.red)
+                        .lineLimit(1)
+                }
 
                 previewCard(message: displayMessage)
 
@@ -82,6 +121,11 @@ struct MailDetailView: View {
         }
         .scrollIndicators(.hidden)
         .task(id: message.id) { await loadFullMessageIfNeeded() }
+        .onChange(of: message.id) { _, _ in
+            trashed = false
+            locallyRead = false
+            mutationError = nil
+        }
     }
 
     private func loadFullMessageIfNeeded() async {
@@ -102,68 +146,6 @@ struct MailDetailView: View {
         } catch {
             Log.warn("mail detail full fetch failed: \(error)", category: "mail")
         }
-    }
-
-    @ViewBuilder
-    private func mailActions(for message: MailMessage) -> some View {
-        let showMarkRead = (message.isUnread && !locallyRead) && !trashed
-        if showMarkRead || mutationError != nil {
-            HStack(spacing: 8) {
-                if showMarkRead {
-                    actionButton(label: "Mark as read",
-                                 icon: "envelope.open",
-                                 tint: Tokens.Color.accent) {
-                        Task {
-                            await runMutation { try await GmailAPI(session: googleSession).markAsRead(id: message.id) }
-                            await MainActor.run { locallyRead = true }
-                        }
-                    }
-                }
-                if let err = mutationError {
-                    Text(err)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.red)
-                        .lineLimit(1)
-                }
-                Spacer()
-            }
-            .opacity(mutating ? 0.6 : 1.0)
-            .animation(.easeOut(duration: 0.12), value: mutating)
-        }
-    }
-
-    private func actionButton(label: String, icon: String, tint: Color,
-                              action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 5) {
-                Image(systemName: icon)
-                    .font(.system(size: 11, weight: .semibold))
-                Text(label)
-                    .font(.system(size: 12, weight: .medium))
-            }
-            .foregroundStyle(tint)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(Capsule().fill(tint.opacity(0.12)))
-            .overlay(Capsule().strokeBorder(tint.opacity(0.35), lineWidth: 0.5))
-        }
-        .buttonStyle(PressableStyle())
-    }
-
-    private func runMutation(_ work: @escaping () async throws -> Void) async {
-        await MainActor.run {
-            mutating = true
-            mutationError = nil
-        }
-        do {
-            try await work()
-            // Tell the rest of the app to refresh mail.
-            NotificationCenter.default.post(name: .mailMutated, object: nil)
-        } catch {
-            await MainActor.run { mutationError = error.localizedDescription }
-            Log.warn("mail mutation failed: \(error)", category: "mail")
-        }
-        await MainActor.run { mutating = false }
     }
 
     private func previewCard(message: MailMessage) -> some View {
@@ -268,5 +250,51 @@ private struct MailHTMLPreview: NSViewRepresentable {
                 decisionHandler(.allow)
             }
         }
+    }
+}
+
+// MARK: - Mail header icon button with hover tooltip
+
+private struct MailToolbarIcon: View {
+    let icon: String
+    let tooltip: String
+    var tint: Color = Tokens.Color.textTertiary
+    var disabled: Bool = false
+    let action: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(tint)
+                .frame(width: 24, height: 24)
+                .background(
+                    Circle().fill(hovering && !disabled
+                                  ? Color.black.opacity(0.05)
+                                  : .clear)
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .disabled(disabled)
+        .onHover { hovering = $0 }
+        .overlay(alignment: .bottomTrailing) {
+            if hovering {
+                Text(tooltip)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(Tokens.Color.textSecondary)
+                    .fixedSize()
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Tokens.Color.surfaceSunken))
+                    .overlay(Capsule().strokeBorder(Tokens.Color.hairline, lineWidth: 0.5))
+                    .offset(y: 22)
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+            }
+        }
+        .animation(.easeOut(duration: 0.25), value: hovering)
     }
 }

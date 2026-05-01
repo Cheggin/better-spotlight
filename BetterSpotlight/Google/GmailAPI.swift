@@ -373,8 +373,19 @@ struct GmailAPI {
     func trash(id: String) async throws {
         let token = try await session.validAccessToken()
         let url = URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages/\(id)/trash")!
-        try await postJSON(url: url, token: token, body: [:])
+        try await postEmpty(url: url, token: token)
         Log.info("gmail trash id=\(id)", category: "mail")
+    }
+
+    private func postEmpty(url: URL, token: String) async throws {
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            let bodyText = String(data: data, encoding: .utf8) ?? ""
+            throw GoogleAPIError.bad(status: (resp as? HTTPURLResponse)?.statusCode ?? -1, body: bodyText)
+        }
     }
 
     private func postJSON(url: URL, token: String, body: [String: Any]) async throws {
