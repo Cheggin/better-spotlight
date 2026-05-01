@@ -303,25 +303,12 @@ struct ContactRecentInteractionsPane: View {
                         .font(.system(size: 10, weight: .semibold))
                         .tracking(0.7)
                         .foregroundStyle(Tokens.Color.textTertiary)
-                    VStack(spacing: 6) {
+                    VStack(spacing: 4) {
                         ForEach(recentMessages.prefix(8), id: \.id) { msg in
-                            HStack(alignment: .top, spacing: 8) {
-                                Circle()
-                                    .fill(msg.isFromMe ? Tokens.Color.accent : Tokens.Color.contactTint)
-                                    .frame(width: 6, height: 6)
-                                    .padding(.top, 6)
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(msg.text)
-                                        .font(.system(size: 12))
-                                        .foregroundStyle(Tokens.Color.textPrimary)
-                                        .lineLimit(2)
-                                    Text(msg.relativeDate)
-                                        .font(.system(size: 10))
-                                        .foregroundStyle(Tokens.Color.textTertiary)
-                                }
-                            }
+                            RecentMessageBubble(message: msg)
                         }
                     }
+                    .frame(maxWidth: .infinity)
                 }
 
                 Spacer(minLength: 0)
@@ -413,6 +400,36 @@ struct ContactRecentInteractionsPane: View {
     }
 }
 
+// MARK: - Recent-message bubble
+
+private struct RecentMessageBubble: View {
+    let message: ChatMessage
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 0) {
+            if message.isFromMe { Spacer(minLength: 32) }
+            VStack(alignment: message.isFromMe ? .trailing : .leading, spacing: 2) {
+                Text(message.text)
+                    .font(.system(size: 12))
+                    .foregroundStyle(message.isFromMe ? .white : Tokens.Color.textPrimary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: 13, style: .continuous)
+                            .fill(message.isFromMe
+                                  ? Tokens.Color.accent
+                                  : Color(red: 0.93, green: 0.94, blue: 0.96))
+                    )
+                Text(message.relativeDate)
+                    .font(.system(size: 9))
+                    .foregroundStyle(Tokens.Color.textTertiary)
+                    .padding(.horizontal, 4)
+            }
+            if !message.isFromMe { Spacer(minLength: 32) }
+        }
+    }
+}
+
 // MARK: - Right pane: contact info derived from a Messages handle
 
 struct ContactDetailFromMessage: View {
@@ -430,20 +447,21 @@ struct ContactDetailFromMessage: View {
                     .tracking(0.7)
                     .foregroundStyle(Tokens.Color.contactTint)
 
-                HStack(spacing: Tokens.Space.md) {
+                HStack(alignment: .center, spacing: Tokens.Space.md) {
                     avatar(size: 56)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(contact?.displayName ?? message.displayName)
                             .font(.system(size: 18, weight: .semibold))
                             .foregroundStyle(Tokens.Color.textPrimary)
-                            .lineLimit(2)
+                            .lineLimit(1)
                         if let role = roleLine {
                             Text(role)
                                 .font(.system(size: 12))
                                 .foregroundStyle(Tokens.Color.textTertiary)
-                                .lineLimit(2)
+                                .lineLimit(1)
                         }
                     }
+                    Spacer(minLength: 0)
                 }
 
                 if let c = contact { contactDetailsCard(c) }
@@ -458,9 +476,9 @@ struct ContactDetailFromMessage: View {
     // MARK: - Contact details
 
     private var roleLine: String? {
-        guard let c = contact else { return message.handle }
+        guard let c = contact else { return nil }
         let parts = [c.jobTitle, c.organization].compactMap { $0 }.filter { !$0.isEmpty }
-        return parts.isEmpty ? message.handle : parts.joined(separator: " · ")
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     @ViewBuilder
@@ -504,10 +522,7 @@ struct ContactDetailFromMessage: View {
                 .padding(.top, 2)
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(values, id: \.self) { v in
-                    Text(v)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Tokens.Color.textPrimary)
-                        .textSelection(.enabled)
+                    CopyableValue(text: v)
                 }
             }
             Spacer(minLength: 0)
@@ -543,6 +558,52 @@ struct ContactDetailFromMessage: View {
                     .foregroundStyle(Tokens.Color.contactTint)
             }
             .frame(width: size, height: size)
+        }
+    }
+}
+
+// MARK: - Copyable value row
+
+/// Selectable text with a hover-revealed copy button. Click the button (or
+/// double-click the row) to copy the value to the clipboard. Briefly flashes
+/// a checkmark on success.
+private struct CopyableValue: View {
+    let text: String
+
+    @State private var hovering = false
+    @State private var copiedFlash = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(text)
+                .font(.system(size: 12))
+                .foregroundStyle(Tokens.Color.textPrimary)
+                .textSelection(.enabled)
+            if hovering || copiedFlash {
+                Button(action: copy) {
+                    Image(systemName: copiedFlash ? "checkmark" : "doc.on.doc")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(copiedFlash ? .green : Tokens.Color.accent)
+                        .frame(width: 16, height: 16)
+                }
+                .buttonStyle(.borderless)
+                .help("Copy")
+            }
+            Spacer(minLength: 0)
+        }
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .onTapGesture(count: 2) { copy() }
+    }
+
+    private func copy() {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(text, forType: .string)
+        copiedFlash = true
+        Task {
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            copiedFlash = false
         }
     }
 }
