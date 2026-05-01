@@ -37,14 +37,11 @@ struct SearchBar: View {
             Spacer(minLength: Tokens.Space.xs)
 
             HStack(spacing: 6) {
-                ToolbarLineIcon(systemName: "folder", tooltip: "Files", url: nil)
-                ToolbarLineIcon(systemName: "square.stack", tooltip: "Folders", url: nil)
                 ToolbarLineIcon(systemName: "calendar", tooltip: "Open Google Calendar",
                                 url: URL(string: "https://calendar.google.com/"))
                 ToolbarLineIcon(systemName: "envelope", tooltip: "Open Gmail",
                                 url: URL(string: "https://mail.google.com/"))
                 ToolbarSettingsButton()
-                ToolbarLineIcon(systemName: "ellipsis", tooltip: "More", url: nil)
             }
         }
         .padding(.horizontal, Tokens.Space.sm)
