@@ -8,6 +8,10 @@ struct MailDetailView: View {
 
     @State private var fullMessage: MailMessage?
     @State private var isLoadingFullMessage = false
+    @State private var mutating = false
+    @State private var mutationError: String?
+    @State private var locallyRead: Bool = false
+    @State private var trashed: Bool = false
 
     var body: some View {
         let displayMessage = fullMessage ?? message
@@ -37,11 +41,30 @@ struct MailDetailView: View {
                             .foregroundStyle(Tokens.Color.textTertiary)
                     }
                     Spacer()
-                    Text(displayMessage.relativeDate)
-                        .font(Tokens.Typeface.caption)
-                        .monospacedDigit()
-                        .foregroundStyle(Tokens.Color.textTertiary)
+                    if !trashed {
+                        Button {
+                            Task {
+                                await runMutation { try await GmailAPI(session: googleSession).trash(id: displayMessage.id) }
+                                await MainActor.run { trashed = true }
+                            }
+                        } label: {
+                            Image(systemName: "trash")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(Tokens.Color.textTertiary)
+                                .frame(width: 22, height: 22)
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Move to Trash")
+                        .disabled(mutating)
+                    } else {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.green)
+                            .frame(width: 22, height: 22)
+                    }
                 }
+
+                mailActions(for: displayMessage)
 
                 previewCard(message: displayMessage)
 
@@ -79,6 +102,68 @@ struct MailDetailView: View {
         } catch {
             Log.warn("mail detail full fetch failed: \(error)", category: "mail")
         }
+    }
+
+    @ViewBuilder
+    private func mailActions(for message: MailMessage) -> some View {
+        let showMarkRead = (message.isUnread && !locallyRead) && !trashed
+        if showMarkRead || mutationError != nil {
+            HStack(spacing: 8) {
+                if showMarkRead {
+                    actionButton(label: "Mark as read",
+                                 icon: "envelope.open",
+                                 tint: Tokens.Color.accent) {
+                        Task {
+                            await runMutation { try await GmailAPI(session: googleSession).markAsRead(id: message.id) }
+                            await MainActor.run { locallyRead = true }
+                        }
+                    }
+                }
+                if let err = mutationError {
+                    Text(err)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.red)
+                        .lineLimit(1)
+                }
+                Spacer()
+            }
+            .opacity(mutating ? 0.6 : 1.0)
+            .animation(.easeOut(duration: 0.12), value: mutating)
+        }
+    }
+
+    private func actionButton(label: String, icon: String, tint: Color,
+                              action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.system(size: 11, weight: .semibold))
+                Text(label)
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .foregroundStyle(tint)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(Capsule().fill(tint.opacity(0.12)))
+            .overlay(Capsule().strokeBorder(tint.opacity(0.35), lineWidth: 0.5))
+        }
+        .buttonStyle(PressableStyle())
+    }
+
+    private func runMutation(_ work: @escaping () async throws -> Void) async {
+        await MainActor.run {
+            mutating = true
+            mutationError = nil
+        }
+        do {
+            try await work()
+            // Tell the rest of the app to refresh mail.
+            NotificationCenter.default.post(name: .mailMutated, object: nil)
+        } catch {
+            await MainActor.run { mutationError = error.localizedDescription }
+            Log.warn("mail mutation failed: \(error)", category: "mail")
+        }
+        await MainActor.run { mutating = false }
     }
 
     private func previewCard(message: MailMessage) -> some View {

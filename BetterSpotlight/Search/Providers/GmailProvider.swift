@@ -27,7 +27,7 @@ final class GmailProvider: SearchProvider {
                 id: "mail:\(msg.id)",
                 title: msg.subject.isEmpty ? "(no subject)" : msg.subject,
                 subtitle: "\(msg.fromName) · \(preview.prefix(80))\(attachmentText)",
-                trailingText: msg.relativeDate,
+                trailingText: nil,
                 iconName: "envelope.fill",
                 category: .mail,
                 payload: .mail(msg),

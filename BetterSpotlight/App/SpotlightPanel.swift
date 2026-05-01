@@ -181,4 +181,5 @@ final class SpotlightEscapeRequest {
 extension Notification.Name {
     static let dismissSpotlight = Notification.Name("BetterSpotlight.dismiss")
     static let spotlightEscapePressed = Notification.Name("BetterSpotlight.escapePressed")
+    static let mailMutated = Notification.Name("BetterSpotlight.mailMutated")
 }

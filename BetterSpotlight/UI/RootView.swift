@@ -92,6 +92,9 @@ struct RootView: View {
             guard let request = notification.object as? SpotlightEscapeRequest else { return }
             request.handled = handleEscape()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .mailMutated)) { _ in
+            coordinator.refresh()
+        }
         .onChange(of: coordinator.results.first?.id) { _, _ in
             if selectedID == nil { selectedID = coordinator.results.first?.id }
         }

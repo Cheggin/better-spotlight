@@ -76,6 +76,8 @@ struct GmailAPI {
         Log.info("gmail message begin id=\(id) mode=\(mode)", category: "timing")
         let json = try await getJSON(url: comps.url!, token: token)
         let snippet = Self.cleanText(json["snippet"] as? String ?? "")
+        let labelIds = (json["labelIds"] as? [String]) ?? []
+        let isUnread = labelIds.contains("UNREAD")
         let payload = (json["payload"] as? [String: Any]) ?? [:]
         let headers = (payload["headers"] as? [[String: Any]]) ?? []
         var subject = ""
@@ -108,7 +110,8 @@ struct GmailAPI {
             fromName: fromName,
             fromEmail: fromEmail,
             date: date,
-            attachments: extracted.attachments
+            attachments: extracted.attachments,
+            isUnread: isUnread
         )
     }
 
@@ -335,6 +338,38 @@ struct GmailAPI {
             output.replaceSubrange(fullRange, with: String(Character(scalar)))
         }
         return output
+    }
+
+    // MARK: - Mutations
+
+    /// Removes the UNREAD label from a message.
+    func markAsRead(id: String) async throws {
+        let token = try await session.validAccessToken()
+        let url = URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages/\(id)/modify")!
+        let body: [String: Any] = ["removeLabelIds": ["UNREAD"]]
+        try await postJSON(url: url, token: token, body: body)
+        Log.info("gmail mark-read id=\(id)", category: "mail")
+    }
+
+    /// Moves a message to Trash.
+    func trash(id: String) async throws {
+        let token = try await session.validAccessToken()
+        let url = URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages/\(id)/trash")!
+        try await postJSON(url: url, token: token, body: [:])
+        Log.info("gmail trash id=\(id)", category: "mail")
+    }
+
+    private func postJSON(url: URL, token: String, body: [String: Any]) async throws {
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            let bodyText = String(data: data, encoding: .utf8) ?? ""
+            throw GoogleAPIError.bad(status: (resp as? HTTPURLResponse)?.statusCode ?? -1, body: bodyText)
+        }
     }
 
     private func getJSON(url: URL, token: String) async throws -> [String: Any] {

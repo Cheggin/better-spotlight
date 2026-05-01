@@ -83,40 +83,53 @@ struct SenderAvatar: View {
         return URL(string: s)
     }
 
+    /// Drops leading subdomains until only two labels remain (e.g.
+    /// "email.openai.com" → "openai.com"). Naive but sufficient for the
+    /// common case; brand domains like "co.uk" would over-strip, but Gmail
+    /// brand mail typically lives under standard TLDs.
+    private func apexDomain(_ d: String) -> String {
+        let parts = d.split(separator: ".")
+        guard parts.count > 2 else { return d }
+        return parts.suffix(2).joined(separator: ".")
+    }
+
     private func load() async {
         guard let domain, !failed else { return }
-        let key = NSString(string: domain)
-        if let cached = Self.cache.object(forKey: key) {
-            image = cached
-            return
-        }
-        if Self.failedDomains.object(forKey: key) != nil { return }
+        let candidates: [String] = {
+            let apex = apexDomain(domain)
+            return apex == domain ? [domain] : [domain, apex]
+        }()
 
-        guard let url = faviconURL(domain: domain) else { return }
-        do {
-            let (data, resp) = try await URLSession.shared.data(from: url)
-            guard let http = resp as? HTTPURLResponse, http.statusCode == 200,
-                  let img = NSImage(data: data)
-            else {
-                Self.failedDomains.setObject(1, forKey: key)
-                failed = true
+        for candidate in candidates {
+            let key = NSString(string: candidate)
+            if let cached = Self.cache.object(forKey: key) {
+                image = cached
                 return
             }
-            // Probe: Google's globe fallback always returns ~16×16 even when
-            // size=128 is requested. Real favicons come back at 32+.
-            // Use the underlying pixel rep, not NSImage.size (which can be misleading).
-            let pixelW = img.representations.first?.pixelsWide ?? Int(img.size.width)
-            let pixelH = img.representations.first?.pixelsHigh ?? Int(img.size.height)
-            guard pixelW >= 32, pixelH >= 32 else {
-                Self.failedDomains.setObject(1, forKey: key)
-                failed = true
+            if Self.failedDomains.object(forKey: key) != nil { continue }
+            guard let url = faviconURL(domain: candidate) else { continue }
+            do {
+                let (data, resp) = try await URLSession.shared.data(from: url)
+                guard let http = resp as? HTTPURLResponse, http.statusCode == 200,
+                      let img = NSImage(data: data) else {
+                    Self.failedDomains.setObject(1, forKey: key)
+                    continue
+                }
+                // Reject Google's 16×16 globe fallback.
+                let pixelW = img.representations.first?.pixelsWide ?? Int(img.size.width)
+                let pixelH = img.representations.first?.pixelsHigh ?? Int(img.size.height)
+                guard pixelW >= 32, pixelH >= 32 else {
+                    Self.failedDomains.setObject(1, forKey: key)
+                    continue
+                }
+                Self.cache.setObject(img, forKey: key)
+                image = img
                 return
+            } catch {
+                Self.failedDomains.setObject(1, forKey: key)
+                continue
             }
-            Self.cache.setObject(img, forKey: key)
-            image = img
-        } catch {
-            Self.failedDomains.setObject(1, forKey: key)
-            failed = true
         }
+        failed = true
     }
 }

@@ -23,7 +23,10 @@ struct OAuthClient {
         "openid",
         "email",
         "profile",
-        "https://www.googleapis.com/auth/gmail.readonly",
+        // gmail.modify supersedes gmail.readonly and adds label changes +
+        // trash. Required for "Mark as read" / "Move to Trash" actions in
+        // MailDetailView. Bumping this requires the user to re-consent.
+        "https://www.googleapis.com/auth/gmail.modify",
         "https://www.googleapis.com/auth/gmail.send",
         "https://www.googleapis.com/auth/calendar.readonly",
         "https://www.googleapis.com/auth/calendar.events",
