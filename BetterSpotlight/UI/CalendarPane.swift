@@ -425,7 +425,7 @@ struct CalendarMonthView: View {
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Tokens.Color.textPrimary)
                 Spacer()
-                NavButton(icon: "chevron.left")  { shiftMonth(-1) }
+                NavButton(icon: "chevron.right") { shiftMonth(1) }
                 Button {
                     let today = Date()
                     monthAnchor = calendar.startOfDay(for: today)
@@ -497,6 +497,12 @@ private struct DayCell: View {
                 if isSelected {
                     Circle().fill(Tokens.Color.accent)
                         .frame(width: 30, height: 30)
+                } else if isToday {
+                    // Light accent fill for today when not the actively
+                    // selected day — clearly distinguishable from the deeper
+                    // accent fill of the selected day.
+                    Circle().fill(Tokens.Color.accentSoft)
+                        .frame(width: 30, height: 30)
                 } else if hovering {
                     Circle().fill(Color.black.opacity(0.05))
                         .frame(width: 30, height: 30)
@@ -504,7 +510,7 @@ private struct DayCell: View {
                 if let d = date {
                     Text("\(Calendar.current.component(.day, from: d))")
                         .font(.system(size: 13,
-                                      weight: isSelected ? .semibold : .regular,
+                                      weight: (isSelected || isToday) ? .semibold : .regular,
                                       design: .default))
                         .monospacedDigit()
                         .foregroundStyle(
