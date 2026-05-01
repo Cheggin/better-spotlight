@@ -18,6 +18,7 @@ struct EventComposer: View {
     @State private var endDate: Date
     @State private var hasTime: Bool = true
     @State private var recurrence: Recurrence = .none
+    @State private var deadline: Date? = nil
 
     enum Recurrence: String, CaseIterable, Identifiable {
         case none, daily, weekly, monthly, yearly
@@ -105,12 +106,11 @@ struct EventComposer: View {
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(Tokens.Color.accent)
                             .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
+                            .frame(minWidth: 60)
                             .padding(.horizontal, 10).padding(.vertical, 4)
                             .overlay(Capsule().strokeBorder(Tokens.Color.accent, lineWidth: 1))
                     }
                     .buttonStyle(PressableStyle())
-                    .fixedSize()
                 }
                 RecurrenceMenu(selection: $recurrence)
                     .padding(.leading, 22 + Tokens.Space.sm)
@@ -144,12 +144,34 @@ struct EventComposer: View {
                         .foregroundStyle(Tokens.Color.textPrimary)
                 }
             } else {
-                // Add deadline (Tasks only) — placeholder for now; deadline
-                // wiring goes through the Tasks API once we add it.
+                // Add deadline (Tasks only).
                 row(icon: "scope") {
-                    Text("Add deadline")
-                        .font(.system(size: 13))
-                        .foregroundStyle(Tokens.Color.textTertiary)
+                    if let _ = deadline {
+                        HStack(spacing: 8) {
+                            DatePill(date: Binding(
+                                get: { deadline ?? Date() },
+                                set: { deadline = $0 }
+                            ))
+                            Button {
+                                deadline = nil
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(Tokens.Color.textTertiary)
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Remove deadline")
+                        }
+                    } else {
+                        Button {
+                            deadline = Calendar.current.startOfDay(for: Date())
+                        } label: {
+                            Text("Add deadline")
+                                .font(.system(size: 13))
+                                .foregroundStyle(Tokens.Color.accent)
+                        }
+                        .buttonStyle(.borderless)
+                    }
                 }
             }
 
@@ -172,7 +194,7 @@ struct EventComposer: View {
             HStack {
                 Spacer()
                 Button {
-                    NSWorkspace.shared.open(URL(string: "https://calendar.google.com/")!)
+                    NSWorkspace.shared.open(moreOptionsURL)
                 } label: {
                     Text("More options")
                         .font(.system(size: 13, weight: .medium))
@@ -189,12 +211,11 @@ struct EventComposer: View {
                         .background(Capsule().fill(Tokens.Color.accent))
                 }
                 .buttonStyle(PressableStyle())
-                .disabled(saving || title.trimmingCharacters(in: .whitespaces).isEmpty
-                          || kind == .task)
+                .disabled(saving || title.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }
         .padding(Tokens.Space.lg)
-        .frame(width: 540)
+        .frame(width: 600)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(Color.white)
@@ -251,24 +272,36 @@ struct EventComposer: View {
         saving = true
         errorMessage = nil
 
-        let parsedGuests = guests
-            .split { $0 == "," || $0 == " " || $0 == ";" }
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { $0.contains("@") }
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
 
         Task {
             do {
-                let api = CalendarAPI(session: googleSession)
-                _ = try await api.createEvent(
-                    title: title.trimmingCharacters(in: .whitespaces),
-                    start: startDate,
-                    end: endDate,
-                    isAllDay: !hasTime,
-                    location: location.isEmpty ? nil : location,
-                    description: notes.isEmpty ? nil : notes,
-                    attendees: parsedGuests,
-                    addMeet: addMeet
-                )
+                switch kind {
+                case .event:
+                    let parsedGuests = guests
+                        .split { $0 == "," || $0 == " " || $0 == ";" }
+                        .map { $0.trimmingCharacters(in: .whitespaces) }
+                        .filter { $0.contains("@") }
+
+                    let api = CalendarAPI(session: googleSession)
+                    _ = try await api.createEvent(
+                        title: trimmedTitle,
+                        start: startDate,
+                        end: endDate,
+                        isAllDay: !hasTime,
+                        location: location.isEmpty ? nil : location,
+                        description: notes.isEmpty ? nil : notes,
+                        attendees: parsedGuests,
+                        addMeet: addMeet,
+                        recurrenceRule: recurrence.rrule
+                    )
+                case .task:
+                    _ = try await GoogleTasksAPI(session: googleSession).createTask(
+                        title: trimmedTitle,
+                        notes: notes.isEmpty ? nil : notes,
+                        due: deadline
+                    )
+                }
                 await MainActor.run {
                     saving = false
                     onCreated()
@@ -280,6 +313,32 @@ struct EventComposer: View {
                     saving = false
                 }
             }
+        }
+    }
+
+    private var moreOptionsURL: URL {
+        switch kind {
+        case .event:
+            return URL(string: "https://calendar.google.com/")!
+        case .task:
+            return URL(string: "https://tasks.google.com/")!
+        }
+    }
+}
+
+private extension EventComposer.Recurrence {
+    var rrule: String? {
+        switch self {
+        case .none:
+            return nil
+        case .daily:
+            return "RRULE:FREQ=DAILY"
+        case .weekly:
+            return "RRULE:FREQ=WEEKLY"
+        case .monthly:
+            return "RRULE:FREQ=MONTHLY"
+        case .yearly:
+            return "RRULE:FREQ=YEARLY"
         }
     }
 }
@@ -317,6 +376,7 @@ private struct DatePill: View {
                     .padding(12)
                     .frame(width: 240)
             }
+            .registersEscapeDismissal(isPresented: $showing)
     }
 
     private var label: String {
@@ -466,12 +526,11 @@ private struct TimePill: View {
     var body: some View {
         PillButton(label: label, icon: "clock") { showing = true }
             .popover(isPresented: $showing, arrowEdge: .bottom) {
-                DatePicker("", selection: $date, displayedComponents: [.hourAndMinute])
-                    .labelsHidden()
-                    .datePickerStyle(.stepperField)
-                    .controlSize(.regular)
-                    .padding(14)
+                TimePicker(date: $date)
+                    .padding(12)
+                    .frame(width: 200)
             }
+            .registersEscapeDismissal(isPresented: $showing)
     }
 
     private var label: String {
@@ -481,8 +540,87 @@ private struct TimePill: View {
     }
 }
 
+/// Two pickers (hour + minute in 5-min steps) plus AM/PM toggle, written
+/// from scratch because macOS's .stepperField DatePicker is laggy on fast
+/// typing and .graphical doesn't include time.
+private struct TimePicker: View {
+    @Binding var date: Date
+
+    private let calendar = Calendar.current
+
+    var body: some View {
+        let comps = calendar.dateComponents([.hour, .minute], from: date)
+        let hour24 = comps.hour ?? 0
+        let minute = comps.minute ?? 0
+        let isPM = hour24 >= 12
+        let hour12 = ((hour24 % 12) == 0) ? 12 : (hour24 % 12)
+        let nearestMinute = ((minute + 2) / 5) * 5 % 60
+
+        VStack(spacing: 10) {
+            HStack(spacing: 8) {
+                Picker("", selection: Binding(
+                    get: { hour12 },
+                    set: { setComponents(hour12: $0, minute: nearestMinute, isPM: isPM) }
+                )) {
+                    ForEach(1...12, id: \.self) { h in
+                        Text("\(h)").tag(h)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 64)
+
+                Text(":")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Tokens.Color.textSecondary)
+
+                Picker("", selection: Binding(
+                    get: { nearestMinute },
+                    set: { setComponents(hour12: hour12, minute: $0, isPM: isPM) }
+                )) {
+                    ForEach(stride(from: 0, through: 55, by: 5).map { $0 }, id: \.self) { m in
+                        Text(String(format: "%02d", m)).tag(m)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 64)
+            }
+
+            Picker("", selection: Binding(
+                get: { isPM ? 1 : 0 },
+                set: { setComponents(hour12: hour12, minute: nearestMinute, isPM: $0 == 1) }
+            )) {
+                Text("AM").tag(0)
+                Text("PM").tag(1)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+        }
+    }
+
+    private func setComponents(hour12: Int, minute: Int, isPM: Bool) {
+        var hour24 = hour12 % 12
+        if isPM { hour24 += 12 }
+        var comps = calendar.dateComponents(
+            [.year, .month, .day, .hour, .minute, .second],
+            from: date
+        )
+        comps.hour = hour24
+        comps.minute = minute
+        comps.second = 0
+        if let updated = calendar.date(from: comps) {
+            date = updated
+        }
+    }
+}
+
 /// Shared visual chrome for DatePill / TimePill.
 private struct PillButton: View {
+    /// Reserve enough horizontal space for the widest label ("Apr 30" /
+    /// "10:00 AM"). Without this the pill width changes with the day number
+    /// or hour count and the whole row shifts on a single-digit → double-digit
+    /// transition.
+    static let labelMinWidth: CGFloat = 56
+
     let label: String
     let icon: String
     let action: () -> Void
@@ -494,7 +632,7 @@ private struct PillButton: View {
                     .font(.system(size: 12, weight: .semibold))
                     .monospacedDigit()
                     .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
+                    .frame(minWidth: PillButton.labelMinWidth, alignment: .center)
                     .foregroundStyle(Tokens.Color.textPrimary)
                 Image(systemName: "chevron.down")
                     .font(.system(size: 8, weight: .semibold))
@@ -514,27 +652,67 @@ private struct PillButton: View {
     }
 }
 
+private struct EscapeDismissalRegistration: ViewModifier {
+    @EnvironmentObject private var escapeStack: SpotlightEscapeStack
+    @Binding var isPresented: Bool
+    @State private var registration: UUID?
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: isPresented) { _, isPresented in
+                updateRegistration(isPresented: isPresented)
+            }
+            .onAppear { updateRegistration(isPresented: isPresented) }
+            .onDisappear {
+                escapeStack.remove(registration)
+                registration = nil
+            }
+    }
+
+    private func updateRegistration(isPresented: Bool) {
+        escapeStack.remove(registration)
+        registration = nil
+        guard isPresented else { return }
+        registration = escapeStack.push {
+            self.isPresented = false
+            return true
+        }
+    }
+}
+
+extension View {
+    fileprivate func registersEscapeDismissal(isPresented: Binding<Bool>) -> some View {
+        modifier(EscapeDismissalRegistration(isPresented: isPresented))
+    }
+}
+
 // MARK: - Recurrence menu
 
 private struct RecurrenceMenu: View {
     @Binding var selection: EventComposer.Recurrence
     @State private var open = false
 
+    @State private var hovering = false
+
     var body: some View {
-        Button { open.toggle() } label: {
-            HStack(spacing: 3) {
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .semibold))
-                    .rotationEffect(.degrees(open ? 180 : 0))
-                    .foregroundStyle(Tokens.Color.textTertiary)
-                Text(selection.label)
-                    .font(.system(size: 11))
-                    .foregroundStyle(Tokens.Color.textTertiary)
-            }
-            .animation(.easeOut(duration: 0.15), value: open)
-            .contentShape(Rectangle())
+        HStack(spacing: 4) {
+            Text(selection.label)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Tokens.Color.textSecondary)
+            Image(systemName: "chevron.down")
+                .font(.system(size: 9, weight: .semibold))
+                .rotationEffect(.degrees(open ? 180 : 0))
+                .foregroundStyle(Tokens.Color.textTertiary)
         }
-        .buttonStyle(.borderless)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(
+            Capsule().fill(hovering ? Color.black.opacity(0.04) : .clear)
+        )
+        .animation(.easeOut(duration: 0.15), value: open)
+        .contentShape(Rectangle())
+        .onTapGesture { open.toggle() }
+        .onHover { hovering = $0 }
         .popover(isPresented: $open, arrowEdge: .top) {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(EventComposer.Recurrence.allCases) { option in
@@ -563,5 +741,6 @@ private struct RecurrenceMenu: View {
             }
             .padding(.vertical, 4)
         }
+        .registersEscapeDismissal(isPresented: $open)
     }
 }

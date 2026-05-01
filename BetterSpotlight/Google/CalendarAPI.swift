@@ -22,7 +22,8 @@ struct CalendarAPI {
         location: String? = nil,
         description: String? = nil,
         attendees: [String] = [],
-        addMeet: Bool = false
+        addMeet: Bool = false,
+        recurrenceRule: String? = nil
     ) async throws -> CalendarEvent? {
         let token = try await session.validAccessToken()
         var comps = URLComponents(string:
@@ -36,6 +37,9 @@ struct CalendarAPI {
         if let description, !description.isEmpty { body["description"] = description }
         if !attendees.isEmpty {
             body["attendees"] = attendees.map { ["email": $0] }
+        }
+        if let recurrenceRule, !recurrenceRule.isEmpty {
+            body["recurrence"] = [recurrenceRule]
         }
         if isAllDay {
             let f = DateFormatter()
@@ -297,7 +301,7 @@ struct CalendarAPI {
     }
 }
 
-private extension ISO8601DateFormatter {
+extension ISO8601DateFormatter {
     static let gcalFractional: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
