@@ -11,6 +11,10 @@ struct MessagesThreadView: View {
     @State private var thread: [ChatMessage] = []
     @State private var isLoading = false
     @State private var error: String?
+    /// Incremented every time the reply box is edited (or grows in size) so
+    /// the thread can re-scroll to the bottom — otherwise a multi-line draft
+    /// would push the most recent bubbles up under the input.
+    @State private var replyTick: Int = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -21,9 +25,11 @@ struct MessagesThreadView: View {
                 Divider().opacity(0.45)
                 threadView(for: m)
                 Divider().opacity(0.45)
-                MessagesReplyBox(message: m) {
-                    Task { await refreshAfterSend() }
-                }
+                MessagesReplyBox(
+                    message: m,
+                    onSent: { Task { await refreshAfterSend() } },
+                    onEdit: { replyTick &+= 1 }
+                )
                 .padding(.horizontal, Tokens.Space.md)
                 .padding(.vertical, Tokens.Space.sm)
             } else {
@@ -120,6 +126,13 @@ struct MessagesThreadView: View {
                     proxy.scrollTo("bottom", anchor: .bottom)
                 }
             }
+            .onChange(of: replyTick) { _, _ in
+                // Reply box just changed size; re-pin the visible area to
+                // the most recent bubble.
+                withAnimation(.easeOut(duration: 0.12)) {
+                    proxy.scrollTo("bottom", anchor: .bottom)
+                }
+            }
         }
     }
 
@@ -176,6 +189,7 @@ struct MessagesThreadView: View {
 struct MessagesReplyBox: View {
     let message: ChatMessage
     var onSent: () -> Void = {}
+    var onEdit: () -> Void = {}
 
     @State private var replyText = ""
     @State private var sending = false
@@ -192,7 +206,7 @@ struct MessagesReplyBox: View {
                 TextField("iMessage \(contact?.displayName.split(separator: " ").first.map(String.init) ?? message.displayName)…",
                           text: $replyText, axis: .vertical)
                     .textFieldStyle(.plain)
-                    .lineLimit(1...4)
+                    .lineLimit(1...10)
                     .font(.system(size: 13))
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
@@ -205,6 +219,14 @@ struct MessagesReplyBox: View {
                             .strokeBorder(Tokens.Color.hairline, lineWidth: 0.5)
                     )
                     .onSubmit { send() }
+                    .onKeyPress(.space, phases: .down) { keyPress in
+                        if keyPress.modifiers.contains(.shift) {
+                            replyText.append("\n")
+                            return .handled
+                        }
+                        return .ignored
+                    }
+                    .onChange(of: replyText) { _, _ in onEdit() }
 
                 Button(action: send) {
                     Image(systemName: sending ? "ellipsis" : "arrow.up")
