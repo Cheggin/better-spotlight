@@ -119,31 +119,6 @@ struct SettingsView: View {
 
             Spacer()
 
-            if category != .all, isVisible {
-                HStack(spacing: 2) {
-                    Button {
-                        preferences.moveVisibleTab(category, by: -1)
-                    } label: {
-                        Image(systemName: "chevron.left")
-                            .frame(width: 22, height: 22)
-                    }
-                    .buttonStyle(.borderless)
-                    .disabled(!canMoveUp)
-                    .help("Move left")
-
-                    Button {
-                        preferences.moveVisibleTab(category, by: 1)
-                    } label: {
-                        Image(systemName: "chevron.right")
-                            .frame(width: 22, height: 22)
-                    }
-                    .buttonStyle(.borderless)
-                    .disabled(!canMoveDown)
-                    .help("Move right")
-                }
-                .foregroundStyle(Tokens.Color.textSecondary)
-            }
-
             Toggle("", isOn: Binding(
                 get: { category == .all || preferences.tabConfiguration.visibleTabs.contains(category) },
                 set: { preferences.setTab(category, visible: $0) }

@@ -16,7 +16,7 @@ struct CalendarFullMonthView: View {
     var onSelectEvent: (CalendarEvent) -> Void
     var onCreateEvent: (Date) -> Void
 
-    @State private var mode: CalendarViewMode = .month
+    @AppStorage("BetterSpotlight.calendarViewMode") private var mode: CalendarViewMode = .month
     @State private var monthAnchor: Date = Calendar.current.startOfDay(for: Date())
 
     private var calendar: Calendar { Calendar.current }
