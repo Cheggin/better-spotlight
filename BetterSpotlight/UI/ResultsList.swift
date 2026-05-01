@@ -46,6 +46,8 @@ struct ResultsList: View {
     }
 
     private var groupedTail: [(SearchCategory, [SearchResult])] {
+        // On the All tab the top hit renders as its own TopHitCard above the
+        // grouped sections; exclude it here so it doesn't appear twice.
         let topHitID = (category == .all) ? displayedTopHit?.id : nil
         let consumed = Set(favorites.map(\.id) + [topHitID].compactMap { $0 })
         let tail = displayResults.filter { !consumed.contains($0.id) }
@@ -438,13 +440,27 @@ private struct ResultRow: View {
 
     @State private var hovering = false
 
+    private var unreadMail: Bool {
+        if case .mail(let m) = result.payload { return m.isUnread }
+        return false
+    }
+
     var body: some View {
         HStack(spacing: 8) {
-            ResultLeadingIcon(result: result, size: 22)
+            ZStack(alignment: .topLeading) {
+                ResultLeadingIcon(result: result, size: 22)
+                if unreadMail {
+                    Circle()
+                        .fill(Tokens.Color.accent)
+                        .frame(width: 7, height: 7)
+                        .overlay(Circle().strokeBorder(Color.white, lineWidth: 1.5))
+                        .offset(x: -3, y: -2)
+                }
+            }
 
             VStack(alignment: .leading, spacing: 0) {
                 Text(result.title)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.system(size: 12, weight: unreadMail ? .semibold : .medium))
                     .foregroundStyle(Tokens.Color.textPrimary)
                     .lineLimit(1)
                     .truncationMode(.tail)
