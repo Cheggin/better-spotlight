@@ -174,6 +174,7 @@ final class SearchCoordinator: ObservableObject {
                 merged.append(contentsOf: chunk)
                 self.results = self.rank(merged)
                 self.counts = self.countByCategory(self.results)
+                self.markLoading(providerLabel: label, isLoading: false)
                 self.prefetchMailBodiesIfNeeded(from: chunk)
                 Log.info("search merge provider=\(label) providerMs=\(providerMs) merged=\(merged.count) totalElapsed=\(Int(Date().timeIntervalSince(searchStart) * 1_000))ms",
                          category: "timing")
@@ -240,6 +241,7 @@ final class SearchCoordinator: ObservableObject {
                 merged.append(contentsOf: chunk)
                 results = rank(merged)
                 counts = countByCategory(results)
+                markLoading(providerLabel: label, isLoading: false)
                 prefetchMailBodiesIfNeeded(from: chunk)
                 Log.info("search warm merge provider=\(label) providerMs=\(providerMs) merged=\(merged.count) totalElapsed=\(Int(Date().timeIntervalSince(warmStart) * 1_000))ms",
                          category: "timing")
@@ -275,13 +277,35 @@ final class SearchCoordinator: ObservableObject {
     }
 
     private func markLoading(_ providers: [SearchProvider], isLoading: Bool) {
-        let categories = Set(providers.flatMap { provider -> [SearchCategory] in
+        var categories = Set(providers.flatMap { provider -> [SearchCategory] in
             provider.category == .files ? [.files, .folders] : [provider.category]
         })
         if isLoading {
+            categories = categories.filter { !hasCurrentResult(in: $0) }
             loadingCategories.formUnion(categories)
         } else {
             loadingCategories.subtract(categories)
+        }
+    }
+
+    private func markLoading(providerLabel: String, isLoading: Bool) {
+        let categories: Set<SearchCategory>
+        if providerLabel == SearchCategory.files.title {
+            categories = [.files, .folders]
+        } else {
+            categories = Set(SearchCategory.allCases.filter { $0.title == providerLabel })
+        }
+
+        if isLoading {
+            loadingCategories.formUnion(categories.filter { !hasCurrentResult(in: $0) })
+        } else {
+            loadingCategories.subtract(categories)
+        }
+    }
+
+    private func hasCurrentResult(in category: SearchCategory) -> Bool {
+        results.contains { result in
+            result.category == category
         }
     }
 
