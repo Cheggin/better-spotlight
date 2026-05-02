@@ -128,12 +128,29 @@ struct RootView: View {
         .background(Color.clear)
     }
 
+    /// True when the user is actively searching — the search overlay should
+    /// take over from the per-tab layout so results across every source
+    /// appear as a single flat list.
+    private var isActivelySearching: Bool {
+        !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     @ViewBuilder
     private var mainContent: some View {
+        // Active search → flat unified list view across every category.
         // Calendar is full-window. Mail gets a wider two-pane layout so
         // rendered HTML email has enough room. Other tabs keep the three-pane
         // layout with tab-specific center and right panes.
-        if category == .calendar {
+        if isActivelySearching {
+            SearchResultsList(
+                results: coordinator.results,
+                query: query,
+                selectedID: $selectedID,
+                onActivate: openSelected,
+                googleSignedIn: googleSession.isSignedIn
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if category == .calendar {
             centerPane
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if category == .mail {

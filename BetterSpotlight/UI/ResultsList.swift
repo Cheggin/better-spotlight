@@ -566,7 +566,10 @@ struct ResultLeadingIcon: View {
         case .file(let info):
             FileTypeBadge(info: info, size: size)
         case .message(let m):
-            ContactAvatar(handle: m.handle, displayName: m.displayName, size: size)
+            ContactAvatar(handle: m.handle,
+                          displayName: m.displayName,
+                          participantHandles: m.participantHandles,
+                          size: size)
         case .contact(let c):
             ContactAvatarFromInfo(contact: c, size: size)
         }
@@ -600,10 +603,13 @@ private struct ContactAvatarFromInfo: View {
 private struct ContactAvatar: View {
     let handle: String
     let displayName: String
+    var participantHandles: [String] = []
     let size: CGFloat
 
     var body: some View {
-        if let data = MessagesProvider.imageData(forHandle: handle),
+        if participantHandles.count > 1 {
+            groupAvatar
+        } else if let data = MessagesProvider.imageData(forHandle: handle),
            let nsImage = NSImage(data: data) {
             Image(nsImage: nsImage)
                 .resizable()
@@ -623,10 +629,49 @@ private struct ContactAvatar: View {
         }
     }
 
+    private var groupAvatar: some View {
+        ZStack {
+            Circle().fill(Tokens.Color.contactTint.opacity(0.14))
+            ForEach(Array(participantHandles.prefix(2).enumerated()), id: \.offset) { index, participant in
+                miniAvatar(handle: participant)
+                    .frame(width: size * 0.66, height: size * 0.66)
+                    .offset(x: index == 0 ? -size * 0.15 : size * 0.15,
+                            y: index == 0 ? -size * 0.10 : size * 0.10)
+            }
+        }
+        .frame(width: size, height: size)
+    }
+
+    private func miniAvatar(handle: String) -> some View {
+        let name = MessagesProvider.name(forHandle: handle)
+        return Group {
+            if let data = MessagesProvider.imageData(forHandle: handle),
+               let nsImage = NSImage(data: data) {
+                Image(nsImage: nsImage)
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fill)
+            } else {
+                ZStack {
+                    Circle().fill(Tokens.Color.contactTint.opacity(0.22))
+                    Text(initials(for: name))
+                        .font(.system(size: size * 0.20, weight: .semibold))
+                        .foregroundStyle(Tokens.Color.contactTint)
+                }
+            }
+        }
+        .clipShape(Circle())
+        .overlay(Circle().strokeBorder(Color.white.opacity(0.9), lineWidth: 1))
+    }
+
     private var initials: String {
-        let parts = displayName.split(separator: " ").prefix(2)
+        initials(for: displayName)
+    }
+
+    private func initials(for value: String) -> String {
+        let parts = value.split(separator: " ").prefix(2)
         let i = parts.compactMap { $0.first }.map(String.init).joined()
-        return (i.isEmpty ? String(displayName.prefix(1)) : i).uppercased()
+        return (i.isEmpty ? String(value.prefix(1)) : i).uppercased()
     }
 }
 
@@ -654,18 +699,49 @@ private struct FileTypeBadge: View {
     let size: CGFloat
 
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(tint.opacity(0.18))
-            Image(systemName: info.iconName)
-                .font(.system(size: size * 0.42, weight: .semibold))
-                .foregroundStyle(tint)
+        // Real macOS file icon — application icons for .app bundles, the
+        // proper document icons for everything else (PDF, image preview,
+        // Numbers spreadsheet, etc.). Falls back to the SF Symbol if the
+        // OS can't resolve one.
+        Group {
+            if let icon = FileSystemIconCache.icon(for: info.url) {
+                Image(nsImage: icon)
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fit)
+            } else {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(tint.opacity(0.18))
+                    Image(systemName: info.iconName)
+                        .font(.system(size: size * 0.42, weight: .semibold))
+                        .foregroundStyle(tint)
+                }
+            }
         }
         .frame(width: size, height: size)
     }
 
     private var tint: Color {
         info.isDirectory ? Tokens.Color.folderTint : Tokens.Color.fileTint
+    }
+}
+
+/// Caches NSWorkspace.shared.icon(forFile:) lookups by absolute path.
+/// `icon(forFile:)` is fast on warm caches but allocates per call; the wrapper
+/// keeps the same NSImage instance so SwiftUI's identity check stays stable
+/// across re-renders and we don't churn through bitmap reps.
+enum FileSystemIconCache {
+    private static let cache = NSCache<NSString, NSImage>()
+    static func icon(for url: URL) -> NSImage? {
+        let key = url.path as NSString
+        if let cached = cache.object(forKey: key) { return cached }
+        let icon = NSWorkspace.shared.icon(forFile: url.path)
+        // NSWorkspace returns a generic doc icon for missing files; treat
+        // a 0×0 image as miss so the SF Symbol fallback kicks in.
+        guard icon.size.width > 0, icon.size.height > 0 else { return nil }
+        cache.setObject(icon, forKey: key)
+        return icon
     }
 }
 
