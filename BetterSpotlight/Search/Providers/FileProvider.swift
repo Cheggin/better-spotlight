@@ -76,7 +76,7 @@ final class FileProvider: NSObject, SearchProvider {
                                 iconName: result.iconName,
                                 category: result.category,
                                 payload: result.payload,
-                                score: s + 0.10
+                                score: s + 0.10 + Self.applicationBoost(for: result, query: q)
                             )
                         }
                     }
@@ -282,5 +282,22 @@ final class FileProvider: NSObject, SearchProvider {
     nonisolated private static func date(for result: SearchResult) -> Date? {
         if case .file(let info) = result.payload { return info.modified }
         return nil
+    }
+
+    /// Promotes Applications above same-name documents. Typing "figma"
+    /// should rank Figma.app over figma.md / figma.png. The boost only
+    /// applies to .app bundles whose basename (sans .app) starts with the
+    /// query, so it doesn't crowd out unrelated apps in long result lists.
+    nonisolated private static func applicationBoost(for result: SearchResult,
+                                                     query: String) -> Double {
+        guard case .file(let info) = result.payload else { return 0 }
+        guard info.url.pathExtension.lowercased() == "app" else { return 0 }
+        let q = query.lowercased()
+        guard !q.isEmpty else { return 0 }
+        let baseName = info.url.deletingPathExtension().lastPathComponent.lowercased()
+        if baseName == q { return 1.0 }            // exact match — pin to top
+        if baseName.hasPrefix(q) { return 0.6 }     // prefix
+        if baseName.contains(q) { return 0.25 }     // substring fallback
+        return 0
     }
 }

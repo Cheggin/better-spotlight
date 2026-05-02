@@ -1,12 +1,9 @@
 import SwiftUI
 import AppKit
 
-/// Dedicated full-window list shown while the user is actively typing a query.
-/// Replaces the All-tab three-pane layout when `query` is non-empty so the
-/// user gets a Spotlight-style flat list of matches across every source —
-/// one row per result, click to select / double-click to open. Each row uses
-/// `ResultLeadingIcon` so application bundles render their real `.icns` icon
-/// and document files render their proper system icon.
+/// Full-window unified search list shown while the user is typing. Replaces
+/// the per-tab three-pane layout so search behaves like Spotlight: one
+/// click to focus, double-click / return to open, ↑/↓ to navigate.
 struct SearchResultsList: View {
     let results: [SearchResult]
     let query: String
@@ -19,6 +16,9 @@ struct SearchResultsList: View {
             emptyState
         } else {
             scrollList
+                .background(KeyEventHandler { event in
+                    handleArrowKeys(event)
+                })
         }
     }
 
@@ -57,11 +57,59 @@ struct SearchResultsList: View {
             .scrollIndicators(.hidden)
             .onChange(of: selectedID) { _, new in
                 guard let id = new else { return }
-                withAnimation(.easeInOut(duration: 0.15)) {
+                withAnimation(.easeInOut(duration: 0.12)) {
                     proxy.scrollTo(id, anchor: .center)
                 }
             }
         }
+    }
+
+    /// Returns true when the event was consumed by row navigation.
+    private func handleArrowKeys(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown else { return false }
+        let delta: Int
+        switch event.keyCode {
+        case 125: delta = 1   // down
+        case 126: delta = -1  // up
+        default: return false
+        }
+        let ids = results.map(\.id)
+        guard !ids.isEmpty else { return false }
+        let current = selectedID.flatMap(ids.firstIndex(of:)) ?? -1
+        let next = max(0, min(ids.count - 1, current + delta))
+        if next != current {
+            selectedID = ids[next]
+        }
+        return true
+    }
+}
+
+/// Bridges a no-op AppKit view that sits in the SwiftUI hierarchy purely so
+/// we can install an event monitor while it's on screen. The monitor is
+/// removed automatically when the view goes away.
+private struct KeyEventHandler: NSViewRepresentable {
+    let handler: (NSEvent) -> Bool
+    func makeNSView(context: Context) -> NSView { NSView() }
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.attach(handler: handler)
+    }
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.detach()
+    }
+    final class Coordinator {
+        private var monitor: Any?
+        func attach(handler: @escaping (NSEvent) -> Bool) {
+            detach()
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { event in
+                handler(event) ? nil : event
+            }
+        }
+        func detach() {
+            if let m = monitor { NSEvent.removeMonitor(m) }
+            monitor = nil
+        }
+        deinit { detach() }
     }
 }
 
@@ -94,16 +142,14 @@ private struct SearchResultRow: View {
 
             Spacer(minLength: Tokens.Space.sm)
 
-            categoryBadge
-                .padding(.trailing, 2)
+            CategoryBadge(category: result.category)
+                .padding(.trailing, 4)
 
-            if let trailing = result.trailingText {
-                Text(trailing)
-                    .font(.system(size: 11, weight: .medium))
-                    .monospacedDigit()
-                    .foregroundStyle(Tokens.Color.textTertiary)
-                    .frame(minWidth: 56, alignment: .trailing)
-            }
+            Text(dateLabel ?? "")
+                .font(.system(size: 11, weight: .medium))
+                .monospacedDigit()
+                .foregroundStyle(Tokens.Color.textTertiary)
+                .frame(width: 70, alignment: .trailing)
         }
         .padding(.horizontal, Tokens.Space.sm)
         .padding(.vertical, 7)
@@ -124,19 +170,69 @@ private struct SearchResultRow: View {
         .onTapGesture { onTap() }
     }
 
-    private var categoryBadge: some View {
+    /// Pulls a relative-date label off the payload directly so EVERY row
+    /// gets a value (Mail rows have no `trailingText`, Files rows have
+    /// "1 wk. ago", etc.).
+    private var dateLabel: String? {
+        let date: Date?
+        switch result.payload {
+        case .mail(let m):          date = m.date
+        case .calendarEvent(let e): date = e.start
+        case .file(let f):          date = f.modified
+        case .message(let m):       date = m.date
+        case .contact:              date = nil
+        }
+        guard let date else { return nil }
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .short
+        return f.localizedString(for: date, relativeTo: Date())
+    }
+}
+
+/// Shows a category pill: real Gmail / Google Calendar logos for those two
+/// sources, otherwise an SF Symbol tinted to the category color.
+private struct CategoryBadge: View {
+    let category: SearchCategory
+
+    var body: some View {
         HStack(spacing: 4) {
-            Image(systemName: result.category.iconName)
-                .font(.system(size: 9, weight: .semibold))
-            Text(result.category.title)
+            iconView
+            Text(category.title)
                 .font(.system(size: 10, weight: .semibold))
                 .tracking(0.4)
         }
-        .foregroundStyle(result.category.tint)
+        .foregroundStyle(category.tint)
         .padding(.horizontal, 6)
         .padding(.vertical, 3)
         .background(
-            Capsule().fill(result.category.tint.opacity(0.12))
+            Capsule().fill(category.tint.opacity(0.12))
         )
+    }
+
+    @ViewBuilder
+    private var iconView: some View {
+        switch category {
+        case .mail:
+            brandedIcon("gmail")
+        case .calendar:
+            brandedIcon("google-calendar")
+        default:
+            Image(systemName: category.iconName)
+                .font(.system(size: 9, weight: .semibold))
+        }
+    }
+
+    @ViewBuilder
+    private func brandedIcon(_ name: String) -> some View {
+        if let img = BundledIcon.image(named: name) {
+            Image(nsImage: img)
+                .resizable()
+                .interpolation(.high)
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 12, height: 12)
+        } else {
+            Image(systemName: category.iconName)
+                .font(.system(size: 9, weight: .semibold))
+        }
     }
 }
