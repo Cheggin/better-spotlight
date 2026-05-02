@@ -22,18 +22,6 @@ struct SearchBar: View {
                 .focused($focused)
                 .frame(height: 28)
 
-            if !query.isEmpty {
-                Button {
-                    query = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 14))
-                        .foregroundStyle(Tokens.Color.textTertiary)
-                        .frame(width: 24, height: 24)
-                }
-                .buttonStyle(PressableStyle())
-            }
-
             Spacer(minLength: Tokens.Space.xs)
 
             HStack(spacing: 6) {
