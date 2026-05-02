@@ -93,7 +93,15 @@ struct RootView: View {
                      category: "timing")
         }
         .onDisappear { coordinator.stopPolling() }
-        .onChange(of: query) { _, new in coordinator.update(query: new, category: category) }
+        .onChange(of: query) { _, new in
+            // Active search is unified across every source — pin the
+            // coordinator to .all so the result set doesn't shrink based
+            // on the visible tab. Tab filter resumes when the query clears.
+            let scope: SearchCategory = new.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? category
+                : .all
+            coordinator.update(query: new, category: scope)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .spotlightEscapePressed)) { notification in
             guard let request = notification.object as? SpotlightEscapeRequest else { return }
             request.handled = handleEscape()
@@ -354,7 +362,7 @@ struct RootView: View {
 
     private func openSelected() {
         guard let result = selectedResult else { return }
-        ResultOpener.open(result)
+        ResultOpener.open(result, googleSession: googleSession)
         dismiss()
     }
 
