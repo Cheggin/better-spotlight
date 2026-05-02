@@ -68,11 +68,13 @@ final class MessagesProvider: SearchProvider {
         Log.info("messages fetched=\(messages.count) in \(elapsedMs)ms",
                  category: "messages")
 
-        // Dedupe by handle — keep newest per conversation. Cap at 20.
+        // Dedupe by conversation — keep newest per chat. Group chats have
+        // many handles, so using the sender handle here incorrectly splits
+        // or retitles the conversation.
         var seen: Set<String> = []
         var out: [RawMessage] = []
         for m in messages.sorted(by: { $0.date > $1.date }) {
-            let key = m.handle.isEmpty ? "self:\(m.rowID)" : m.handle.lowercased()
+            let key = m.conversationKey
             if seen.contains(key) { continue }
             seen.insert(key)
             out.append(m)
@@ -87,16 +89,21 @@ final class MessagesProvider: SearchProvider {
         // Sort by message recency: score = the message's UNIX timestamp.
         // Newer message = larger score = higher in the list.
         return pool.map { msg in
-            let displayName = Self.name(forHandle: msg.handle)
+            let displayName = Self.conversationName(for: msg)
             let score = msg.date.timeIntervalSince1970
+            let senderName = Self.name(forHandle: msg.handle)
+            let preview = msg.isGroupConversation && !msg.isFromMe && !msg.handle.isEmpty
+                ? "\(senderName): \(msg.text.replacingOccurrences(of: "\n", with: " "))"
+                : msg.text.replacingOccurrences(of: "\n", with: " ")
             return SearchResult(
                 id: "msg:\(msg.rowID)",
                 title: displayName,
-                subtitle: "\(msg.isUnread && !msg.isFromMe ? "Unread · " : "")\(msg.text.replacingOccurrences(of: "\n", with: " "))",
+                subtitle: "\(msg.isUnread && !msg.isFromMe ? "Unread · " : "")\(preview)",
                 trailingText: msg.relativeDate,
                 iconName: "bubble.left.fill",
                 category: .messages,
-                payload: .message(msg.toDomain(displayName: displayName)),
+                payload: .message(msg.toDomain(displayName: displayName,
+                                               senderDisplayName: senderName)),
                 score: score
             )
         }
@@ -197,32 +204,79 @@ final class MessagesProvider: SearchProvider {
         return contactCache[key] ?? prettyHandle(handle)
     }
 
+    nonisolated private static func conversationName(for message: RawMessage) -> String {
+        if let display = nilIfBlank(message.chatDisplayName) {
+            return display
+        }
+        if message.isGroupConversation {
+            let names = message.participantHandles
+                .map(name(forHandle:))
+                .filter { !$0.isEmpty }
+            if names.isEmpty {
+                return nilIfBlank(message.chatIdentifier) ?? name(forHandle: message.handle)
+            }
+            if names.count <= 3 {
+                return names.joined(separator: ", ")
+            }
+            return "\(names.prefix(2).joined(separator: ", ")) +\(names.count - 2)"
+        }
+        return name(forHandle: nilIfBlank(message.handle) ?? message.participantHandles.first ?? "")
+    }
+
+    nonisolated private static func nilIfBlank(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else { return nil }
+        return trimmed
+    }
+
     /// Fetch the full conversation thread for a single handle, newest last.
     /// Used by the Messages tab to render a full chat scrollback.
     nonisolated static func fetchThread(forHandle handle: String, max: Int = 200) throws -> [ChatMessage] {
+        try fetchThread(whereClause: "WHERE \(ChatDB.visibleMessagePredicate) AND h.id = '\(ChatDB.escape(handle))'",
+                        max: max,
+                        fallbackDisplayName: name(forHandle: handle))
+    }
+
+    /// Fetch the full conversation thread for a selected message. Group chats
+    /// must use the chat row id, not the sender handle.
+    nonisolated static func fetchThread(forConversation message: ChatMessage,
+                                        max: Int = 200) throws -> [ChatMessage] {
+        if let chatID = message.chatID {
+            return try fetchThread(whereClause: "WHERE \(ChatDB.visibleMessagePredicate) AND cmj.chat_id = \(chatID)",
+                                   max: max,
+                                   fallbackDisplayName: message.displayName)
+        }
+        return try fetchThread(forHandle: message.handle, max: max)
+    }
+
+    nonisolated private static func fetchThread(whereClause: String,
+                                                max: Int,
+                                                fallbackDisplayName: String) throws -> [ChatMessage] {
         let dbURL = FileManager.default.homeDirectoryForCurrentUser
             .appending(path: "Library/Messages/chat.db")
         guard FileManager.default.isReadableFile(atPath: dbURL.path) else {
             throw MessagesError.fullDiskAccessRequired
         }
 
-        let escaped = ChatDB.escape(handle)
-        let sql = ChatDB.selectSQL(
-            whereClause: "WHERE \(ChatDB.bodyPredicate) AND h.id = '\(escaped)'",
-            limit: max
-        )
+        let sql = ChatDB.selectSQL(whereClause: whereClause, limit: max)
         let rows = try ChatDB.run(sql: sql, dbURL: dbURL)
-        let displayName = name(forHandle: handle)
         let messages: [ChatMessage] = rows.map {
-            ChatMessage(
+            let displayName = nilIfBlank(conversationName(for: $0)) ?? fallbackDisplayName
+            return ChatMessage(
                 id: String($0.rowID),
+                guid: $0.guid,
                 displayName: displayName,
+                senderDisplayName: name(forHandle: $0.handle),
                 handle: $0.handle,
+                chatID: $0.chatID,
+                chatIdentifier: $0.chatIdentifier,
+                participantHandles: $0.participantHandles,
                 text: $0.text,
                 date: $0.date,
                 isFromMe: $0.isFromMe,
                 isUnread: $0.isUnread,
-                attachments: $0.attachments
+                attachments: $0.attachments,
+                reactions: $0.reactions
             )
         }
         return messages.reversed() // chronological (oldest → newest)
@@ -282,12 +336,24 @@ private enum ChatDB {
     static let bodyPredicate =
         "((m.text IS NOT NULL AND m.text != '') OR m.attributedBody IS NOT NULL OR m.cache_has_attachments = 1)"
 
+    static let visibleMessagePredicate =
+        "(\(bodyPredicate) AND NOT \(associatedOverlayPredicate(alias: "m")))"
+
     /// Builds the SELECT we always use. `whereClause` is inlined verbatim so
     /// callers can build query-specific constraints.
     static func selectSQL(whereClause: String, limit: Int) -> String {
         """
-        SELECT m.ROWID, m.text, m.date, m.is_from_me, m.is_read,
+        SELECT m.ROWID, m.guid, m.text, m.date, m.is_from_me, m.is_read,
                COALESCE(h.id, '') AS handle,
+               cmj.chat_id,
+               COALESCE(c.chat_identifier, ''),
+               COALESCE(c.display_name, ''),
+               COALESCE((
+                   SELECT group_concat(hp.id, '__BS_PART__')
+                   FROM chat_handle_join chj
+                   JOIN handle hp ON hp.ROWID = chj.handle_id
+                   WHERE chj.chat_id = cmj.chat_id
+               ), '') AS participants,
                COALESCE(quote(m.attributedBody), ''),
                COALESCE((
                    SELECT group_concat(
@@ -301,8 +367,11 @@ private enum ChatDB {
                    JOIN attachment a ON a.ROWID = maj.attachment_id
                    WHERE maj.message_id = m.ROWID
                      AND COALESCE(a.hide_attachment, 0) = 0
-               ), '') AS attachments
+               ), '') AS attachments,
+               \(reactionsSelectSQL(messageAlias: "m")) AS reactions
         FROM message m
+        LEFT JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+        LEFT JOIN chat c ON c.ROWID = cmj.chat_id
         LEFT JOIN handle h ON h.ROWID = m.handle_id
         \(whereClause)
         ORDER BY m.date DESC
@@ -310,13 +379,23 @@ private enum ChatDB {
         """
     }
 
-    /// Latest message per handle. This prevents one busy conversation from
-    /// filling the row limit before other recent senders are considered.
+    /// Latest message per conversation. This prevents one busy conversation
+    /// from filling the row limit before other recent conversations are
+    /// considered, and it keeps group chats grouped by chat row id.
     static func latestPerHandleSQL(limit: Int) -> String {
         """
         WITH ranked AS (
-            SELECT m.ROWID, m.text, m.date, m.is_from_me, m.is_read,
+            SELECT m.ROWID, m.guid, m.text, m.date, m.is_from_me, m.is_read,
                    COALESCE(h.id, '') AS handle,
+                   cmj.chat_id AS chat_id,
+                   COALESCE(c.chat_identifier, '') AS chat_identifier,
+                   COALESCE(c.display_name, '') AS chat_display_name,
+                   COALESCE((
+                       SELECT group_concat(hp.id, '__BS_PART__')
+                       FROM chat_handle_join chj
+                       JOIN handle hp ON hp.ROWID = chj.handle_id
+                       WHERE chj.chat_id = cmj.chat_id
+                   ), '') AS participants,
                    COALESCE(quote(m.attributedBody), '') AS attributed_body,
                    COALESCE((
                        SELECT group_concat(
@@ -332,14 +411,19 @@ private enum ChatDB {
                          AND COALESCE(a.hide_attachment, 0) = 0
                    ), '') AS attachments,
                    ROW_NUMBER() OVER (
-                       PARTITION BY COALESCE(h.id, 'self:' || m.ROWID)
+                       PARTITION BY COALESCE(CAST(cmj.chat_id AS TEXT), h.id, 'self:' || m.ROWID)
                        ORDER BY m.date DESC
                    ) AS rn
             FROM message m
+            LEFT JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+            LEFT JOIN chat c ON c.ROWID = cmj.chat_id
             LEFT JOIN handle h ON h.ROWID = m.handle_id
-            WHERE \(bodyPredicate) AND h.id IS NOT NULL AND h.id != ''
+            WHERE \(visibleMessagePredicate) AND (cmj.chat_id IS NOT NULL OR (h.id IS NOT NULL AND h.id != ''))
         )
-        SELECT ROWID, text, date, is_from_me, is_read, handle, attributed_body, attachments
+        SELECT ROWID, guid, text, date, is_from_me, is_read, handle, chat_id,
+               chat_identifier, chat_display_name, participants,
+               attributed_body, attachments,
+               \(reactionsSelectSQL(messageAlias: "ranked")) AS reactions
         FROM ranked
         WHERE rn = 1
         ORDER BY date DESC
@@ -351,7 +435,7 @@ private enum ChatDB {
     /// keyword + sender-handle match.
     static func recentWhereClause(query: String, extraHandles: [String]) -> String {
         if query.isEmpty {
-            return "WHERE \(bodyPredicate)"
+            return "WHERE \(visibleMessagePredicate)"
         }
         let escaped = escape(query, alsoQuotes: true)
         var conditions = ["m.text LIKE '%\(escaped)%' COLLATE NOCASE"]
@@ -360,8 +444,72 @@ private enum ChatDB {
                 .map { "'\(escape($0))'" }
                 .joined(separator: ",")
             conditions.append("h.id IN (\(inList))")
+            conditions.append("""
+            EXISTS (
+                SELECT 1
+                FROM chat_handle_join chj
+                JOIN handle hp ON hp.ROWID = chj.handle_id
+                WHERE chj.chat_id = cmj.chat_id AND hp.id IN (\(inList))
+            )
+            """)
         }
-        return "WHERE \(bodyPredicate) AND (\(conditions.joined(separator: " OR ")))"
+        conditions.append("c.display_name LIKE '%\(escaped)%' COLLATE NOCASE")
+        return "WHERE \(visibleMessagePredicate) AND (\(conditions.joined(separator: " OR ")))"
+    }
+
+    static func associatedOverlayPredicate(alias: String) -> String {
+        """
+        (\(alias).associated_message_guid IS NOT NULL
+         AND (\(alias).associated_message_type BETWEEN 2000 AND 3007
+              OR \(alias).associated_message_type = 1000))
+        """
+    }
+
+    static func associatedGUIDMatches(alias: String, targetGUID: String) -> String {
+        let candidates = ["\(targetGUID)"]
+            + (0...20).map { "'p:\($0)/' || \(targetGUID)" }
+        return "\(alias).associated_message_guid IN (\(candidates.joined(separator: ", ")))"
+    }
+
+    static func reactionsSelectSQL(messageAlias: String) -> String {
+        """
+        COALESCE((
+            SELECT group_concat(
+                r.ROWID || '__BS_FIELD__' ||
+                r.associated_message_type || '__BS_FIELD__' ||
+                COALESCE(r.associated_message_emoji, '') || '__BS_FIELD__' ||
+                r.is_from_me || '__BS_FIELD__' ||
+                COALESCE(rh.id, '') || '__BS_FIELD__' ||
+                r.date || '__BS_FIELD__' ||
+                COALESCE(ra.filename, '') || '__BS_FIELD__' ||
+                COALESCE(ra.mime_type, '') || '__BS_FIELD__' ||
+                COALESCE(ra.uti, '') || '__BS_FIELD__' ||
+                COALESCE(ra.transfer_name, ''),
+                '__BS_ITEM__'
+            )
+            FROM message r
+            LEFT JOIN handle rh ON rh.ROWID = r.handle_id
+            LEFT JOIN message_attachment_join rmaj ON rmaj.message_id = r.ROWID
+            LEFT JOIN attachment ra ON ra.ROWID = rmaj.attachment_id
+                                     AND COALESCE(ra.hide_attachment, 0) = 0
+            WHERE \(associatedGUIDMatches(alias: "r", targetGUID: "\(messageAlias).guid"))
+              AND (r.associated_message_type BETWEEN 2000 AND 2006
+                   OR (r.associated_message_type IN (1000, 2007) AND ra.ROWID IS NOT NULL))
+              AND (
+                  r.associated_message_type NOT BETWEEN 2000 AND 2006
+                  OR NOT EXISTS (
+                      SELECT 1
+                      FROM message rr
+                      WHERE \(associatedGUIDMatches(alias: "rr", targetGUID: "\(messageAlias).guid"))
+                        AND rr.associated_message_type = r.associated_message_type + 1000
+                        AND rr.date > r.date
+                        AND rr.is_from_me = r.is_from_me
+                        AND COALESCE(rr.handle_id, 0) = COALESCE(r.handle_id, 0)
+                        AND COALESCE(rr.associated_message_emoji, '') = COALESCE(r.associated_message_emoji, '')
+                  )
+              )
+        ), '')
+        """
     }
 
     /// Single-quote-escape for SQL string literals. With `alsoQuotes`, also
@@ -414,20 +562,27 @@ private enum ChatDB {
         let raw = String(data: data, encoding: .utf8) ?? ""
         var out: [RawMessage] = []
         for record in raw.split(separator: "\u{1E}", omittingEmptySubsequences: true) {
-            let cols = record.split(separator: "\u{1F}", maxSplits: 7,
+            let cols = record.split(separator: "\u{1F}", maxSplits: 13,
                                     omittingEmptySubsequences: false)
-            guard cols.count == 8,
+            guard cols.count == 14,
                   let rowID = Int(cols[0]),
-                  let dateNS = Double(cols[2])
+                  let dateNS = Double(cols[3])
             else { continue }
-            var text = String(cols[1])
-            let isFromMe = (Int(cols[3]) ?? 0) == 1
-            let isUnread = (Int(cols[4]) ?? 1) == 0
-            let handle = String(cols[5])
-            let attributedQuoted = String(cols[6])
-            let attachments = parseAttachments(String(cols[7]))
-            let seconds = dateNS > 1_000_000_000_000 ? dateNS / 1_000_000_000 : dateNS
-            let date = Date(timeIntervalSince1970: appleEpoch + seconds)
+            let guid = String(cols[1])
+            var text = String(cols[2])
+            let isFromMe = (Int(cols[4]) ?? 0) == 1
+            let isUnread = (Int(cols[5]) ?? 1) == 0
+            let handle = String(cols[6])
+            let chatID = Int(cols[7]).flatMap { $0 == 0 ? nil : $0 }
+            let chatIdentifier = String(cols[8])
+            let chatDisplayName = String(cols[9])
+            let participantHandles = String(cols[10])
+                .components(separatedBy: "__BS_PART__")
+                .filter { !$0.isEmpty }
+            let attributedQuoted = String(cols[11])
+            let attachments = parseAttachments(String(cols[12]))
+            let reactions = parseReactions(String(cols[13]))
+            let date = dateFromChatDBValue(dateNS)
 
             if text.isEmpty, let decoded = decodeAttributedBody(attributedQuoted) {
                 text = decoded
@@ -436,12 +591,21 @@ private enum ChatDB {
             guard !text.isEmpty || !attachments.isEmpty else { continue }
 
             out.append(RawMessage(
-                rowID: rowID, text: text, date: date,
+                rowID: rowID, guid: guid, text: text, date: date,
                 isFromMe: isFromMe, isUnread: isUnread, handle: handle,
-                attachments: attachments
+                chatID: chatID, chatIdentifier: chatIdentifier,
+                chatDisplayName: chatDisplayName,
+                participantHandles: participantHandles,
+                attachments: attachments,
+                reactions: reactions
             ))
         }
         return out
+    }
+
+    private static func dateFromChatDBValue(_ raw: Double) -> Date {
+        let seconds = raw > 1_000_000_000_000 ? raw / 1_000_000_000 : raw
+        return Date(timeIntervalSince1970: appleEpoch + seconds)
     }
 
     private static func parseAttachments(_ raw: String) -> [ChatAttachment] {
@@ -462,6 +626,44 @@ private enum ChatDB {
                                           ? URL(fileURLWithPath: path).lastPathComponent
                                           : transferName)
             }
+    }
+
+    private static func parseReactions(_ raw: String) -> [ChatReaction] {
+        guard !raw.isEmpty else { return [] }
+        return raw.components(separatedBy: "__BS_ITEM__")
+            .compactMap { item -> ChatReaction? in
+                let parts = item.components(separatedBy: "__BS_FIELD__")
+                guard parts.count == 10,
+                      let type = Int(parts[1]),
+                      let kind = ChatReaction.Kind(rawValue: type),
+                      let dateValue = Double(parts[5])
+                else { return nil }
+                let attachment = chatAttachment(path: parts[6],
+                                                mimeType: parts[7],
+                                                uti: parts[8],
+                                                transferName: parts[9])
+                return ChatReaction(id: parts[0],
+                                    kind: kind,
+                                    emoji: parts[2],
+                                    isFromMe: (Int(parts[3]) ?? 0) == 1,
+                                    handle: parts[4],
+                                    date: dateFromChatDBValue(dateValue),
+                                    attachment: attachment)
+            }
+    }
+
+    private static func chatAttachment(path rawPath: String,
+                                       mimeType: String,
+                                       uti: String,
+                                       transferName: String) -> ChatAttachment? {
+        let path = expandedMessagePath(rawPath)
+        guard !path.isEmpty else { return nil }
+        return ChatAttachment(path: path,
+                              mimeType: mimeType,
+                              uti: uti,
+                              displayName: transferName.isEmpty
+                                  ? URL(fileURLWithPath: path).lastPathComponent
+                                  : transferName)
     }
 
     private static func expandedMessagePath(_ raw: String) -> String {
@@ -579,12 +781,28 @@ private extension Data {
 
 struct RawMessage {
     let rowID: Int
+    let guid: String
     let text: String
     let date: Date
     let isFromMe: Bool
     let isUnread: Bool
     let handle: String
+    let chatID: Int?
+    let chatIdentifier: String
+    let chatDisplayName: String
+    let participantHandles: [String]
     let attachments: [ChatAttachment]
+    let reactions: [ChatReaction]
+
+    var conversationKey: String {
+        if let chatID { return "chat:\(chatID)" }
+        if !handle.isEmpty { return "handle:\(handle.lowercased())" }
+        return "self:\(rowID)"
+    }
+
+    var isGroupConversation: Bool {
+        participantHandles.count > 1 || chatIdentifier.hasPrefix("chat") || !chatDisplayName.isEmpty
+    }
 
     var relativeDate: String {
         let f = RelativeDateTimeFormatter()
@@ -592,16 +810,22 @@ struct RawMessage {
         return f.localizedString(for: date, relativeTo: Date())
     }
 
-    func toDomain(displayName: String) -> ChatMessage {
+    func toDomain(displayName: String, senderDisplayName: String) -> ChatMessage {
         ChatMessage(
             id: String(rowID),
+            guid: guid,
             displayName: displayName,
+            senderDisplayName: senderDisplayName,
             handle: handle,
+            chatID: chatID,
+            chatIdentifier: chatIdentifier,
+            participantHandles: participantHandles,
             text: text,
             date: date,
             isFromMe: isFromMe,
             isUnread: isUnread,
-            attachments: attachments
+            attachments: attachments,
+            reactions: reactions
         )
     }
 }
@@ -618,15 +842,91 @@ struct ChatAttachment: Hashable, Identifiable {
     }
 }
 
+struct ChatReaction: Hashable, Identifiable {
+    enum Kind: Int, Hashable {
+        case love = 2000
+        case like = 2001
+        case dislike = 2002
+        case laugh = 2003
+        case emphasize = 2004
+        case question = 2005
+        case emoji = 2006
+        case sticker = 2007
+        case legacySticker = 1000
+
+        var systemImageName: String? {
+            switch self {
+            case .love: return "heart.fill"
+            case .like: return "hand.thumbsup.fill"
+            case .dislike: return "hand.thumbsdown.fill"
+            case .laugh, .emphasize, .question, .emoji, .sticker, .legacySticker: return nil
+            }
+        }
+
+        var fallbackText: String {
+            switch self {
+            case .love: return "heart"
+            case .like: return "+1"
+            case .dislike: return "-1"
+            case .laugh: return "HA"
+            case .emphasize: return "!!"
+            case .question: return "?"
+            case .emoji: return ""
+            case .sticker, .legacySticker: return ""
+            }
+        }
+
+        var isSticker: Bool {
+            switch self {
+            case .sticker, .legacySticker: return true
+            case .love, .like, .dislike, .laugh, .emphasize, .question, .emoji: return false
+            }
+        }
+    }
+
+    let id: String
+    let kind: Kind
+    let emoji: String
+    let isFromMe: Bool
+    let handle: String
+    let date: Date
+    let attachment: ChatAttachment?
+
+    var systemImageName: String? { kind.systemImageName }
+
+    var isSticker: Bool { kind.isSticker && attachment != nil }
+
+    var displayText: String {
+        if kind == .emoji, !emoji.isEmpty { return emoji }
+        return kind.fallbackText
+    }
+}
+
 struct ChatMessage: Hashable {
     let id: String
+    let guid: String
     let displayName: String
+    let senderDisplayName: String
     let handle: String
+    let chatID: Int?
+    let chatIdentifier: String
+    let participantHandles: [String]
     let text: String
     let date: Date
     let isFromMe: Bool
     let isUnread: Bool
     let attachments: [ChatAttachment]
+    let reactions: [ChatReaction]
+
+    var conversationKey: String {
+        if let chatID { return "chat:\(chatID)" }
+        if !handle.isEmpty { return "handle:\(handle.lowercased())" }
+        return "message:\(id)"
+    }
+
+    var isGroupConversation: Bool {
+        participantHandles.count > 1 || chatIdentifier.hasPrefix("chat")
+    }
 
     var relativeDate: String {
         let f = RelativeDateTimeFormatter()

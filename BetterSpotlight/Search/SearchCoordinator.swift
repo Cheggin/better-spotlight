@@ -355,14 +355,14 @@ final class SearchCoordinator: ObservableObject {
 
     private func prefetchMessageThreadsIfNeeded(from results: [SearchResult]) {
         var seen: Set<String> = []
-        let handles = results.compactMap { result -> String? in
+        let conversations = results.compactMap { result -> ChatMessage? in
             guard case .message(let message) = result.payload else { return nil }
-            guard !message.handle.isEmpty, seen.insert(message.handle).inserted else { return nil }
-            return message.handle
+            guard seen.insert(message.conversationKey).inserted else { return nil }
+            return message
         }
-        guard !handles.isEmpty else { return }
+        guard !conversations.isEmpty else { return }
         Task {
-            await MessageThreadCache.shared.prefetch(handles: handles,
+            await MessageThreadCache.shared.prefetch(conversations: conversations,
                                                      limit: 80,
                                                      maxCount: 4)
         }

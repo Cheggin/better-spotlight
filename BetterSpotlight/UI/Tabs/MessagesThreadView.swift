@@ -38,8 +38,8 @@ struct MessagesThreadView: View {
                 placeholder
             }
         }
-        .task(id: message?.handle) { await loadThread() }
-        .task(id: message?.handle) { await pollWhileVisible() }
+        .task(id: message?.conversationKey) { await loadThread() }
+        .task(id: message?.conversationKey) { await pollWhileVisible() }
     }
 
     /// Re-reads chat.db a few times after a send. The Messages agent commits
@@ -66,23 +66,33 @@ struct MessagesThreadView: View {
 
     private func header(for m: ChatMessage) -> some View {
         // Only show the raw handle (phone / email) under the display name when
-        // (1) it isn't a known contact (otherwise it's redundant) AND (2) it
-        // isn't just a re-formatted version of the same phone number — for
-        // unknown numbers, displayName already prints "(313) 307-4667" while
-        // handle is "+13133074667"; both are the same data.
-        let knownContact = ContactsProvider.contact(forHandle: m.handle) != nil
+        // we genuinely have nothing better — i.e., the displayName is itself
+        // just a re-formatted version of the same handle digits. If any name
+        // resolution succeeded (contacts, cache, server-side), the handle line
+        // is redundant.
         let nameDigits = m.displayName.filter { $0.isNumber }
         let handleDigits = m.handle.filter { $0.isNumber }
         let displayNameIsHandle = !nameDigits.isEmpty
             && (nameDigits == handleDigits || handleDigits.hasSuffix(nameDigits))
+        let hasResolvedName = !displayNameIsHandle
+            && m.displayName.lowercased() != m.handle.lowercased()
 
         return HStack(spacing: Tokens.Space.sm) {
-            ContactAvatar(handle: m.handle, displayName: m.displayName, size: 36)
+            ContactAvatar(handle: m.handle,
+                          displayName: m.displayName,
+                          participantHandles: m.participantHandles,
+                          size: 36)
             VStack(alignment: .leading, spacing: 0) {
                 Text(m.displayName)
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Tokens.Color.textPrimary)
-                if !knownContact, !displayNameIsHandle {
+                let participants = participantSummary(for: m)
+                if m.isGroupConversation, participants != m.displayName {
+                    Text(participants)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Tokens.Color.textTertiary)
+                        .lineLimit(1)
+                } else if !hasResolvedName, !displayNameIsHandle {
                     Text(m.handle)
                         .font(.system(size: 11))
                         .foregroundStyle(Tokens.Color.textTertiary)
@@ -90,10 +100,14 @@ struct MessagesThreadView: View {
             }
             Spacer()
             Button {
-                let recipient = m.handle.addingPercentEncoding(
-                    withAllowedCharacters: .urlPathAllowed) ?? m.handle
-                if let url = URL(string: "sms:\(recipient)") {
-                    NSWorkspace.shared.open(url)
+                if m.isGroupConversation {
+                    openMessagesApp()
+                } else {
+                    let recipient = m.handle.addingPercentEncoding(
+                        withAllowedCharacters: .urlPathAllowed) ?? m.handle
+                    if let url = URL(string: "sms:\(recipient)") {
+                        NSWorkspace.shared.open(url)
+                    }
                 }
             } label: {
                 Text("Open in Messages")
@@ -101,6 +115,18 @@ struct MessagesThreadView: View {
                     .foregroundStyle(Tokens.Color.accent)
             }
             .buttonStyle(.borderless)
+        }
+    }
+
+    private func participantSummary(for message: ChatMessage) -> String {
+        message.participantHandles
+            .map(MessagesProvider.name(forHandle:))
+            .joined(separator: ", ")
+    }
+
+    private func openMessagesApp() {
+        if let messagesURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.iChat") {
+            NSWorkspace.shared.openApplication(at: messagesURL, configuration: .init())
         }
     }
 
@@ -124,7 +150,7 @@ struct MessagesThreadView: View {
                             DateDivider(date: msg.date)
                                 .padding(.top, 8)
                         }
-                        Bubble(message: msg)
+                        Bubble(message: msg, showTime: shouldShowTime(at: idx))
                             .id(msg.id)
                     }
                     Color.clear.frame(height: 8).id("bottom")
@@ -161,6 +187,18 @@ struct MessagesThreadView: View {
         return !Calendar.current.isDate(prev, inSameDayAs: curr)
     }
 
+    /// Show the time stamp only on the last bubble of a burst — i.e., when
+    /// the next message is from a different sender or arrives more than five
+    /// minutes later. Always show on the final bubble in the thread.
+    private func shouldShowTime(at idx: Int) -> Bool {
+        guard idx + 1 < thread.count else { return true }
+        let curr = thread[idx]
+        let next = thread[idx + 1]
+        if curr.isFromMe != next.isFromMe { return true }
+        if curr.senderDisplayName != next.senderDisplayName { return true }
+        return next.date.timeIntervalSince(curr.date) > 5 * 60
+    }
+
     private var placeholder: some View {
         VStack(spacing: Tokens.Space.sm) {
             Spacer()
@@ -185,12 +223,11 @@ struct MessagesThreadView: View {
         }
         if showSpinner && thread.isEmpty { isLoading = true }
         error = nil
-        let handle = m.handle
         let started = Date()
         do {
             if !forceRefresh,
                let cached = await MessageThreadCache.shared.cachedThread(
-                   forHandle: handle,
+                   forConversation: m,
                    limit: initialThreadLimit
                ) {
                 thread = cached
@@ -200,7 +237,7 @@ struct MessagesThreadView: View {
             }
 
             let result = try await MessageThreadCache.shared.thread(
-                forHandle: handle,
+                forConversation: m,
                 limit: initialThreadLimit,
                 forceRefresh: forceRefresh
             )
@@ -233,13 +270,14 @@ struct MessagesReplyBox: View {
     @State private var sentFlash = false
 
     private var contact: ContactInfo? {
-        ContactsProvider.contact(forHandle: message.handle)
+        guard !message.isGroupConversation else { return nil }
+        return ContactsProvider.contact(forHandle: message.handle)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .bottom, spacing: 8) {
-                TextField("iMessage \(contact?.displayName.split(separator: " ").first.map(String.init) ?? message.displayName)…",
+                TextField(placeholder,
                           text: $replyText, axis: .vertical)
                     .textFieldStyle(.plain)
                     .lineLimit(1...10)
@@ -314,7 +352,16 @@ struct MessagesReplyBox: View {
     }
 
     private var canSend: Bool {
-        !sending && !replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !message.isGroupConversation
+            && !sending
+            && !replyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var placeholder: String {
+        if message.isGroupConversation {
+            return "Open in Messages to reply to group..."
+        }
+        return "iMessage \(contact?.displayName.split(separator: " ").first.map(String.init) ?? message.displayName)..."
     }
 
     private func send() {
@@ -349,44 +396,200 @@ struct MessagesReplyBox: View {
 
 private struct Bubble: View {
     let message: ChatMessage
+    var showTime: Bool = true
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 6) {
             if message.isFromMe { Spacer(minLength: 40) }
             VStack(alignment: message.isFromMe ? .trailing : .leading, spacing: 2) {
-                if !message.attachments.isEmpty {
-                    ForEach(message.attachments) { attachment in
-                        AttachmentBubble(attachment: attachment,
-                                         isFromMe: message.isFromMe)
+                VStack(alignment: message.isFromMe ? .trailing : .leading, spacing: 2) {
+                    if !message.attachments.isEmpty {
+                        ForEach(message.attachments) { attachment in
+                            AttachmentBubble(attachment: attachment,
+                                             isFromMe: message.isFromMe)
+                        }
+                    }
+                    if !message.text.isEmpty {
+                        if message.isGroupConversation, !message.isFromMe {
+                            Text(message.senderDisplayName)
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(Tokens.Color.textTertiary)
+                                .padding(.horizontal, 4)
+                        }
+                        Text(message.text)
+                            .font(.system(size: 13))
+                            .foregroundStyle(message.isFromMe ? .white : Tokens.Color.textPrimary)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 7)
+                            .background(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .fill(message.isFromMe
+                                          ? Tokens.Color.accent
+                                          : Color(red: 0.93, green: 0.94, blue: 0.96))
+                            )
                     }
                 }
-                if !message.text.isEmpty {
-                    Text(message.text)
-                        .font(.system(size: 13))
-                        .foregroundStyle(message.isFromMe ? .white : Tokens.Color.textPrimary)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 7)
-                        .background(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .fill(message.isFromMe
-                                      ? Tokens.Color.accent
-                                      : Color(red: 0.93, green: 0.94, blue: 0.96))
-                        )
+                .overlay(alignment: reactionAlignment) {
+                    if !message.reactions.isEmpty {
+                        ReactionCluster(reactions: message.reactions,
+                                        messageIsFromMe: message.isFromMe)
+                            .offset(x: 8, y: -9)
+                    }
                 }
-                Text(timeLabel)
-                    .font(.system(size: 9))
-                    .monospacedDigit()
-                    .foregroundStyle(Tokens.Color.textTertiary)
-                    .padding(.horizontal, 4)
+                .padding(.top, message.reactions.isEmpty ? 0 : 10)
+
+                if showTime {
+                    Text(timeLabel)
+                        .font(.system(size: 9))
+                        .monospacedDigit()
+                        .foregroundStyle(Tokens.Color.textTertiary)
+                        .padding(.horizontal, 4)
+                }
             }
             if !message.isFromMe { Spacer(minLength: 40) }
         }
+    }
+
+    private var reactionAlignment: Alignment {
+        .topTrailing
     }
 
     private var timeLabel: String {
         let f = DateFormatter()
         f.dateFormat = "h:mm a"
         return f.string(from: message.date)
+    }
+}
+
+private struct ReactionCluster: View {
+    let reactions: [ChatReaction]
+    let messageIsFromMe: Bool
+
+    var body: some View {
+        HStack(spacing: containsSticker ? 4 : 2) {
+            ForEach(Array(reactions.prefix(4))) { reaction in
+                ReactionToken(reaction: reaction, messageIsFromMe: messageIsFromMe)
+            }
+            if reactions.count > 4 {
+                Text("+\(reactions.count - 4)")
+                    .font(.system(size: 9, weight: .bold))
+                    .monospacedDigit()
+                    .foregroundStyle(foreground)
+                    .padding(.horizontal, 4)
+            }
+        }
+        .padding(.horizontal, containsSticker ? 3 : 5)
+        .padding(.vertical, containsSticker ? 2 : 3)
+        .background(
+            Capsule(style: .continuous)
+                .fill(background)
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .strokeBorder(Color.white.opacity(0.9), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.08), radius: 2, x: 0, y: 1)
+    }
+
+    private var containsSticker: Bool {
+        reactions.contains { $0.isSticker }
+    }
+
+    private var background: Color {
+        if containsSticker { return Color.white.opacity(0.94) }
+        return messageIsFromMe
+            ? Color(red: 0.93, green: 0.94, blue: 0.96)
+            : Tokens.Color.accent
+    }
+
+    private var foreground: Color {
+        messageIsFromMe ? Tokens.Color.accent : .white
+    }
+}
+
+private struct ReactionToken: View {
+    let reaction: ChatReaction
+    let messageIsFromMe: Bool
+
+    var body: some View {
+        Group {
+            if reaction.isSticker, let attachment = reaction.attachment {
+                StickerReactionImage(path: attachment.path)
+            } else if let imageName = reaction.systemImageName {
+                Image(systemName: imageName)
+                    .font(.system(size: 10, weight: .bold))
+            } else {
+                Text(reaction.displayText)
+                    .font(.system(size: reaction.kind == .emoji ? 11 : 9, weight: .bold))
+            }
+        }
+        .foregroundStyle(foreground)
+        .frame(minWidth: 12, minHeight: 12)
+    }
+
+    private var foreground: Color {
+        switch reaction.kind {
+        case .love:
+            return Color(red: 1.0, green: 0.45, blue: 0.62)
+        case .like, .dislike, .laugh, .emphasize, .question, .emoji, .sticker, .legacySticker:
+            return messageIsFromMe ? Tokens.Color.accent : .white
+        }
+    }
+}
+
+private struct StickerReactionImage: View {
+    let path: String
+    @State private var image: NSImage?
+    @State private var failed = false
+
+    var body: some View {
+        ZStack {
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.medium)
+                    .aspectRatio(contentMode: .fit)
+                    .padding(1)
+            } else if failed {
+                Image(systemName: "face.smiling")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Tokens.Color.accent)
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+                    .scaleEffect(0.6)
+            }
+        }
+        .frame(width: 34, height: 34)
+        .background(Circle().fill(Color.white.opacity(0.96)))
+        .clipShape(Circle())
+        .overlay(Circle().strokeBorder(Color.white.opacity(0.95), lineWidth: 1))
+        .shadow(color: .black.opacity(0.12), radius: 2, x: 0, y: 1)
+        .task(id: path) {
+            await load()
+        }
+    }
+
+    @MainActor
+    private func load() async {
+        let key = path as NSString
+        if let cached = AttachmentImageCache.shared.object(forKey: key) {
+            image = cached
+            failed = false
+            return
+        }
+
+        failed = false
+        let loaded = await Task.detached(priority: .utility) {
+            NSImage(contentsOfFile: path)
+        }.value
+
+        if let loaded {
+            AttachmentImageCache.shared.setObject(loaded, forKey: key)
+            image = loaded
+        } else {
+            failed = true
+        }
     }
 }
 
@@ -519,9 +722,12 @@ private struct DateDivider: View {
 private struct ContactAvatar: View {
     let handle: String
     let displayName: String
+    var participantHandles: [String] = []
     let size: CGFloat
     var body: some View {
-        if let data = MessagesProvider.imageData(forHandle: handle),
+        if participantHandles.count > 1 {
+            groupAvatar
+        } else if let data = MessagesProvider.imageData(forHandle: handle),
            let img = NSImage(data: data) {
             Image(nsImage: img).resizable().interpolation(.high)
                 .aspectRatio(contentMode: .fill)
@@ -545,6 +751,41 @@ private struct ContactAvatar: View {
         }
     }
 
+    private var groupAvatar: some View {
+        ZStack {
+            Circle().fill(Tokens.Color.contactTint.opacity(0.14))
+            ForEach(Array(participantHandles.prefix(2).enumerated()), id: \.offset) { index, participant in
+                miniAvatar(handle: participant)
+                    .frame(width: size * 0.66, height: size * 0.66)
+                    .offset(x: index == 0 ? -size * 0.15 : size * 0.15,
+                            y: index == 0 ? -size * 0.10 : size * 0.10)
+            }
+        }
+        .frame(width: size, height: size)
+    }
+
+    private func miniAvatar(handle: String) -> some View {
+        let name = MessagesProvider.name(forHandle: handle)
+        return Group {
+            if let data = MessagesProvider.imageData(forHandle: handle),
+               let img = NSImage(data: data) {
+                Image(nsImage: img)
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fill)
+            } else {
+                ZStack {
+                    Circle().fill(Tokens.Color.contactTint.opacity(0.22))
+                    Text(initials(for: name))
+                        .font(.system(size: size * 0.20, weight: .semibold))
+                        .foregroundStyle(Tokens.Color.contactTint)
+                }
+            }
+        }
+        .clipShape(Circle())
+        .overlay(Circle().strokeBorder(Color.white.opacity(0.9), lineWidth: 1))
+    }
+
     /// Treat the display name as anonymous when it has no letters — i.e. it's
     /// just a phone number / email handle stand-in. Prevents avatars like "(3"
     /// for unknown numbers.
@@ -553,8 +794,12 @@ private struct ContactAvatar: View {
     }
 
     private var initials: String {
-        let parts = displayName.split(separator: " ").prefix(2)
+        initials(for: displayName)
+    }
+
+    private func initials(for value: String) -> String {
+        let parts = value.split(separator: " ").prefix(2)
         let i = parts.compactMap { $0.first }.map(String.init).joined()
-        return (i.isEmpty ? String(displayName.prefix(1)) : i).uppercased()
+        return (i.isEmpty ? String(value.prefix(1)) : i).uppercased()
     }
 }
