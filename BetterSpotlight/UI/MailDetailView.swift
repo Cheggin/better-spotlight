@@ -120,11 +120,26 @@ struct MailDetailView: View {
             }
         }
         .scrollIndicators(.hidden)
-        .task(id: message.id) { await loadFullMessageIfNeeded() }
+        .task(id: message.id) {
+            await autoMarkAsReadIfNeeded()
+            await loadFullMessageIfNeeded()
+        }
         .onChange(of: message.id) { _, _ in
             trashed = false
             locallyRead = false
             mutationError = nil
+        }
+    }
+
+    private func autoMarkAsReadIfNeeded() async {
+        guard googleSession.isSignedIn, message.isUnread, !locallyRead else { return }
+        locallyRead = true
+        do {
+            try await GmailAPI(session: googleSession).markAsRead(id: message.id)
+            NotificationCenter.default.post(name: .mailMutated, object: nil)
+        } catch {
+            Log.warn("mail auto mark-read failed: \(error)", category: "mail")
+            await MainActor.run { locallyRead = false }
         }
     }
 
