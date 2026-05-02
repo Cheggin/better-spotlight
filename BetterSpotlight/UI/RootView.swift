@@ -155,7 +155,8 @@ struct RootView: View {
                 query: query,
                 selectedID: $selectedID,
                 onActivate: openSelected,
-                googleSignedIn: googleSession.isSignedIn
+                googleSignedIn: googleSession.isSignedIn,
+                isLoading: coordinator.isLoading
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if category == .calendar {

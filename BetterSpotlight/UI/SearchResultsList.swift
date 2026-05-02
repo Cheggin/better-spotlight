@@ -10,10 +10,18 @@ struct SearchResultsList: View {
     @Binding var selectedID: SearchResult.ID?
     var onActivate: () -> Void
     var googleSignedIn: Bool
+    /// True while providers are still resolving the current query.
+    var isLoading: Bool = false
 
     var body: some View {
         if results.isEmpty {
-            emptyState
+            // Skeleton rows while the query is in flight; only switch to
+            // the real "no results" state once every provider has reported.
+            if isLoading {
+                SkeletonResultsList()
+            } else {
+                emptyState
+            }
         } else {
             scrollList
                 .background(KeyEventHandler { event in
@@ -110,6 +118,84 @@ private struct KeyEventHandler: NSViewRepresentable {
             monitor = nil
         }
         deinit { detach() }
+    }
+}
+
+/// Placeholder rows rendered while a query is still resolving. Mirrors the
+/// real `SearchResultRow` layout exactly — same icon footprint, same two
+/// text lines, same trailing date column — so the transition into real
+/// results is silent (no shifting, no blank flash).
+private struct SkeletonResultsList: View {
+    var rowCount: Int = 8
+
+    var body: some View {
+        VStack(spacing: 4) {
+            ForEach(0..<rowCount, id: \.self) { idx in
+                SkeletonResultRow(seed: idx)
+            }
+        }
+        .padding(.horizontal, Tokens.Space.md)
+        .padding(.vertical, Tokens.Space.sm)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .accessibilityHidden(true)
+    }
+}
+
+private struct SkeletonResultRow: View {
+    let seed: Int
+
+    @State private var phase: CGFloat = 0
+
+    var body: some View {
+        HStack(alignment: .center, spacing: Tokens.Space.sm) {
+            shimmerBlock(width: 28, height: 28, cornerRadius: 7)
+
+            VStack(alignment: .leading, spacing: 4) {
+                shimmerBlock(width: titleWidth, height: 11, cornerRadius: 4)
+                shimmerBlock(width: subtitleWidth, height: 9, cornerRadius: 4)
+            }
+
+            Spacer(minLength: Tokens.Space.sm)
+
+            shimmerBlock(width: 50, height: 10, cornerRadius: 4)
+                .frame(width: 70, alignment: .trailing)
+        }
+        .padding(.horizontal, Tokens.Space.sm)
+        .padding(.vertical, 7)
+        .onAppear {
+            withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) {
+                phase = 1
+            }
+        }
+    }
+
+    private var titleWidth: CGFloat {
+        // Slight per-row variation so the skeleton doesn't look striped.
+        let base: CGFloat = 220
+        return base + CGFloat((seed * 37) % 60)
+    }
+
+    private var subtitleWidth: CGFloat {
+        let base: CGFloat = 140
+        return base + CGFloat((seed * 53) % 80)
+    }
+
+    private func shimmerBlock(width: CGFloat, height: CGFloat,
+                              cornerRadius: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(
+                LinearGradient(
+                    colors: [
+                        Color.black.opacity(0.06),
+                        Color.black.opacity(0.10),
+                        Color.black.opacity(0.06),
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            )
+            .frame(width: width, height: height)
+            .opacity(0.6 + 0.4 * Double(phase))
     }
 }
 
