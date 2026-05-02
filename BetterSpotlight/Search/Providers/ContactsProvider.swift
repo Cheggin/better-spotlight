@@ -7,6 +7,7 @@ final class ContactsProvider: SearchProvider {
 
     private let store = CNContactStore()
     nonisolated(unsafe) static var cached: [ContactInfo] = []
+    nonisolated(unsafe) private static var cachedSearchTextByID: [String: String] = [:]
 
     /// Resolve a Messages handle (phone/email) to a full `ContactInfo`.
     /// Mirrors `MessagesProvider.name(forHandle:)` normalization.
@@ -34,13 +35,12 @@ final class ContactsProvider: SearchProvider {
     func search(query rawQuery: String) async throws -> [SearchResult] {
         await prefetch()
         let q = rawQuery.trimmingCharacters(in: .whitespaces).lowercased()
+        let preparedQuery = FuzzyMatcher.PreparedQuery(q)
         let pool = Self.cached
         let filtered = q.isEmpty
             ? Array(pool.prefix(50))
             : pool.filter { c in
-                c.displayName.lowercased().contains(q) ||
-                c.phoneNumbers.contains(where: { $0.lowercased().contains(q) }) ||
-                c.emails.contains(where: { $0.lowercased().contains(q) })
+                Self.searchText(for: c).contains(q)
             }
         return filtered.map { c in
             SearchResult(
@@ -52,7 +52,8 @@ final class ContactsProvider: SearchProvider {
                 category: .contacts,
                 payload: .contact(c),
                 score: q.isEmpty ? 0.4
-                    : (FuzzyMatcher.score(query: q, candidate: c.displayName) ?? 0.30)
+                    : (FuzzyMatcher.score(preparedQuery: preparedQuery,
+                                          candidate: c.displayName) ?? 0.30)
             )
         }
     }
@@ -105,6 +106,19 @@ final class ContactsProvider: SearchProvider {
             Log.warn("contacts: enumeration failed: \(error)", category: "contacts")
         }
         Self.cached = out.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+        Self.cachedSearchTextByID = Dictionary(uniqueKeysWithValues: Self.cached.map {
+            ($0.id, Self.makeSearchText(for: $0))
+        })
         Log.info("contacts: cached \(Self.cached.count) entries", category: "contacts")
+    }
+
+    nonisolated private static func searchText(for contact: ContactInfo) -> String {
+        cachedSearchTextByID[contact.id] ?? makeSearchText(for: contact)
+    }
+
+    nonisolated private static func makeSearchText(for contact: ContactInfo) -> String {
+        ([contact.displayName] + contact.phoneNumbers + contact.emails)
+            .joined(separator: " ")
+            .lowercased()
     }
 }

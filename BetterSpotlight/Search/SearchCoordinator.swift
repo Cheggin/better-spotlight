@@ -52,7 +52,7 @@ final class SearchCoordinator: ObservableObject {
             let debounceStart = Date()
             Log.info("search debounce begin query='\(query)' category=\(category.title)",
                      category: "timing")
-            try? await Task.sleep(nanoseconds: 140_000_000) // 140ms debounce
+            try? await Task.sleep(nanoseconds: Self.debounceDelayNanoseconds(for: query))
             guard !Task.isCancelled else { return }
             Log.info("search debounce fired query='\(query)' category=\(category.title) +\(Int(Date().timeIntervalSince(debounceStart) * 1_000))ms",
                      category: "timing")
@@ -149,7 +149,14 @@ final class SearchCoordinator: ObservableObject {
             ?? TabConfiguration.defaultAllCategories)
     }
 
-    private func run(query: String, category: SearchCategory) async {
+    nonisolated static func debounceDelayNanoseconds(for query: String) -> UInt64 {
+        let count = query.count
+        if count == 0 { return 100_000_000 }
+        if count == 1 { return 75_000_000 }
+        return 45_000_000
+    }
+
+    func run(query: String, category: SearchCategory) async {
         let searchStart = Date()
         isLoading = true
         lastQuery = query
@@ -168,9 +175,10 @@ final class SearchCoordinator: ObservableObject {
         var merged = query.isEmpty
             ? results
             : resultsForInactiveCategories(keeping: activeProviders, query: query)
-        await withTaskGroup(of: (String, [SearchResult], Int).self) { group in
+        await withTaskGroup(of: (SearchCategory, [SearchResult], Int).self) { group in
             for provider in activeProviders {
-                let label = provider.category.title
+                let providerCategory = provider.category
+                let label = providerCategory.title
                 group.addTask { [provider] in
                     let providerStart = Date()
                     Log.info("provider \(label) begin query='\(query)'", category: "timing")
@@ -179,26 +187,25 @@ final class SearchCoordinator: ObservableObject {
                         let ms = Int(Date().timeIntervalSince(providerStart) * 1_000)
                         Log.info("provider \(label) complete count=\(results.count) +\(ms)ms",
                                  category: "timing")
-                        return (label, results, ms)
+                        return (providerCategory, results, ms)
                     }
                     catch {
                         Log.warn("provider \(label) failed: \(error)")
                         let ms = Int(Date().timeIntervalSince(providerStart) * 1_000)
                         Log.info("provider \(label) failed +\(ms)ms error=\(error.localizedDescription)",
                                  category: "timing")
-                        return (label, [], ms)
+                        return (providerCategory, [], ms)
                     }
                 }
             }
-            for await (label, chunk, providerMs) in group {
-                merged.removeAll { self.result($0, belongsToProviderLabel: label) }
+            for await (providerCategory, chunk, providerMs) in group {
+                merged.removeAll { self.result($0, belongsToProviderCategory: providerCategory) }
                 merged.append(contentsOf: chunk)
-                self.results = self.rank(merged)
-                self.counts = self.countByCategory(self.results)
-                self.markLoading(providerLabel: label, isLoading: false)
+                self.publish(merged)
+                self.markLoading(providerCategory: providerCategory, isLoading: false)
                 self.prefetchMailBodiesIfNeeded(from: chunk)
                 self.prefetchMessageThreadsIfNeeded(from: chunk)
-                Log.info("search merge provider=\(label) providerMs=\(providerMs) merged=\(merged.count) totalElapsed=\(Int(Date().timeIntervalSince(searchStart) * 1_000))ms",
+                Log.info("search merge provider=\(providerCategory.title) providerMs=\(providerMs) merged=\(merged.count) totalElapsed=\(Int(Date().timeIntervalSince(searchStart) * 1_000))ms",
                          category: "timing")
             }
         }
@@ -231,9 +238,10 @@ final class SearchCoordinator: ObservableObject {
                  category: "timing")
         defer { markLoading(warmProviders, isLoading: false) }
         var merged = results
-        await withTaskGroup(of: (String, [SearchResult], Int).self) { group in
+        await withTaskGroup(of: (SearchCategory, [SearchResult], Int).self) { group in
             for provider in warmProviders {
-                let label = provider.category.title
+                let providerCategory = provider.category
+                let label = providerCategory.title
                 group.addTask { [provider] in
                     let providerStart = Date()
                     Log.info("warm provider \(label) begin query='\(query)'", category: "timing")
@@ -242,27 +250,26 @@ final class SearchCoordinator: ObservableObject {
                         let ms = Int(Date().timeIntervalSince(providerStart) * 1_000)
                         Log.info("warm provider \(label) complete count=\(results.count) +\(ms)ms",
                                  category: "timing")
-                        return (label, results, ms)
+                        return (providerCategory, results, ms)
                     } catch {
                         let ms = Int(Date().timeIntervalSince(providerStart) * 1_000)
                         Log.warn("warm provider \(label) failed: \(error)")
                         Log.info("warm provider \(label) failed +\(ms)ms error=\(error.localizedDescription)",
                                  category: "timing")
-                        return (label, [], ms)
+                        return (providerCategory, [], ms)
                     }
                 }
             }
 
-            for await (label, chunk, providerMs) in group {
+            for await (providerCategory, chunk, providerMs) in group {
                 guard !Task.isCancelled, lastQuery == query else { return }
-                merged.removeAll { self.result($0, belongsToProviderLabel: label) }
+                merged.removeAll { self.result($0, belongsToProviderCategory: providerCategory) }
                 merged.append(contentsOf: chunk)
-                results = rank(merged)
-                counts = countByCategory(results)
-                markLoading(providerLabel: label, isLoading: false)
+                publish(merged)
+                markLoading(providerCategory: providerCategory, isLoading: false)
                 prefetchMailBodiesIfNeeded(from: chunk)
                 prefetchMessageThreadsIfNeeded(from: chunk)
-                Log.info("search warm merge provider=\(label) providerMs=\(providerMs) merged=\(merged.count) totalElapsed=\(Int(Date().timeIntervalSince(warmStart) * 1_000))ms",
+                Log.info("search warm merge provider=\(providerCategory.title) providerMs=\(providerMs) merged=\(merged.count) totalElapsed=\(Int(Date().timeIntervalSince(warmStart) * 1_000))ms",
                          category: "timing")
             }
         }
@@ -284,6 +291,14 @@ final class SearchCoordinator: ObservableObject {
         }
     }
 
+    private func provider(_ provider: SearchProvider,
+                          matchesAny categories: Set<SearchCategory>) -> Bool {
+        if provider.category == .files {
+            return categories.contains(.files) || categories.contains(.folders)
+        }
+        return categories.contains(provider.category)
+    }
+
     private func resultsForInactiveCategories(keeping providers: [SearchProvider],
                                               query: String) -> [SearchResult] {
         guard query.isEmpty else { return [] }
@@ -293,19 +308,12 @@ final class SearchCoordinator: ObservableObject {
         return results.filter { activeCategories.contains($0.category) == false }
     }
 
-    private func provider(_ provider: SearchProvider,
-                          matchesAny categories: Set<SearchCategory>) -> Bool {
-        if provider.category == .files {
-            return categories.contains(.files) || categories.contains(.folders)
-        }
-        return categories.contains(provider.category)
-    }
-
-    private func result(_ result: SearchResult, belongsToProviderLabel label: String) -> Bool {
-        if label == SearchCategory.files.title {
+    private func result(_ result: SearchResult,
+                        belongsToProviderCategory providerCategory: SearchCategory) -> Bool {
+        if providerCategory == .files {
             return result.category == .files || result.category == .folders
         }
-        return result.category.title == label
+        return result.category == providerCategory
     }
 
     private func markLoading(_ providers: [SearchProvider], isLoading: Bool) {
@@ -313,40 +321,35 @@ final class SearchCoordinator: ObservableObject {
             provider.category == .files ? [.files, .folders] : [provider.category]
         })
         if isLoading {
-            categories = categories.filter { !hasCurrentResult(in: $0) }
+            let currentCategories = Set(results.map(\.category))
+            categories.subtract(currentCategories)
             loadingCategories.formUnion(categories)
         } else {
             loadingCategories.subtract(categories)
         }
     }
 
-    private func markLoading(providerLabel: String, isLoading: Bool) {
-        let categories: Set<SearchCategory>
-        if providerLabel == SearchCategory.files.title {
-            categories = [.files, .folders]
-        } else {
-            categories = Set(SearchCategory.allCases.filter { $0.title == providerLabel })
-        }
+    private func markLoading(providerCategory: SearchCategory, isLoading: Bool) {
+        let categories = resultCategories(forProviderCategory: providerCategory)
 
         if isLoading {
-            loadingCategories.formUnion(categories.filter { !hasCurrentResult(in: $0) })
+            let currentCategories = Set(results.map(\.category))
+            loadingCategories.formUnion(categories.subtracting(currentCategories))
         } else {
             loadingCategories.subtract(categories)
         }
     }
 
-    private func hasCurrentResult(in category: SearchCategory) -> Bool {
-        results.contains { result in
-            result.category == category
-        }
+    private func resultCategories(forProviderCategory category: SearchCategory) -> Set<SearchCategory> {
+        category == .files ? [.files, .folders] : [category]
     }
 
     private func prefetchMailBodiesIfNeeded(from results: [SearchResult]) {
         guard let googleSession else { return }
-        let messages = results.compactMap { result -> MailMessage? in
+        let messages = Array(results.lazy.compactMap { result -> MailMessage? in
             if case .mail(let message) = result.payload { return message }
             return nil
-        }
+        }.prefix(2))
         guard !messages.isEmpty else { return }
         MailBodyCache.shared.prefetch(messages: messages,
                                       googleSession: googleSession,
@@ -355,10 +358,14 @@ final class SearchCoordinator: ObservableObject {
 
     private func prefetchMessageThreadsIfNeeded(from results: [SearchResult]) {
         var seen: Set<String> = []
-        let conversations = results.compactMap { result -> ChatMessage? in
-            guard case .message(let message) = result.payload else { return nil }
-            guard seen.insert(message.conversationKey).inserted else { return nil }
-            return message
+        var conversations: [ChatMessage] = []
+        conversations.reserveCapacity(4)
+        for result in results {
+            guard case .message(let message) = result.payload,
+                  seen.insert(message.conversationKey).inserted
+            else { continue }
+            conversations.append(message)
+            if conversations.count >= 4 { break }
         }
         guard !conversations.isEmpty else { return }
         Task {
@@ -368,17 +375,36 @@ final class SearchCoordinator: ObservableObject {
         }
     }
 
-    private func rank(_ items: [SearchResult]) -> [SearchResult] {
-        let now = Date()
-        return items.sorted { lhs, rhs in
-            let lhsPriority = lhs.allPageTopHitPriority(now: now)
-            let rhsPriority = rhs.allPageTopHitPriority(now: now)
-            if lhsPriority != rhsPriority { return lhsPriority > rhsPriority }
-            return lhs.score > rhs.score
-        }
+    private func publish(_ items: [SearchResult]) {
+        let ranked = Self.rank(items)
+        results = ranked
+        counts = Self.countByCategory(ranked)
     }
 
-    private func countByCategory(_ items: [SearchResult]) -> [SearchCategory: Int] {
+    nonisolated static func rank(_ items: [SearchResult], now: Date = Date()) -> [SearchResult] {
+        guard items.count > 128 else {
+            return items.sorted { lhs, rhs in
+                let lhsPriority = lhs.allPageTopHitPriority(now: now)
+                let rhsPriority = rhs.allPageTopHitPriority(now: now)
+                if lhsPriority != rhsPriority { return lhsPriority > rhsPriority }
+                if lhs.score != rhs.score { return lhs.score > rhs.score }
+                return lhs.id < rhs.id
+            }
+        }
+
+        return items
+            .map { (result: $0, priority: $0.allPageTopHitPriority(now: now)) }
+            .sorted { lhs, rhs in
+                let lhsPriority = lhs.priority
+                let rhsPriority = rhs.priority
+                if lhsPriority != rhsPriority { return lhsPriority > rhsPriority }
+                if lhs.result.score != rhs.result.score { return lhs.result.score > rhs.result.score }
+                return lhs.result.id < rhs.result.id
+            }
+            .map(\.result)
+    }
+
+    nonisolated static func countByCategory(_ items: [SearchResult]) -> [SearchCategory: Int] {
         var out: [SearchCategory: Int] = [:]
         for r in items { out[r.category, default: 0] += 1 }
         out[.all] = items.count

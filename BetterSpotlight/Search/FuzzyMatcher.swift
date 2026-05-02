@@ -3,8 +3,20 @@ import Foundation
 /// Subsequence-based fuzzy matcher. Returns nil when not a match.
 /// Score is in [0, 1] — higher is better. Bonuses for prefix, word boundary, and case match.
 enum FuzzyMatcher {
+    struct PreparedQuery: Sendable {
+        let lowercased: String
+
+        init(_ query: String) {
+            self.lowercased = query.lowercased()
+        }
+    }
+
     static func score(query: String, candidate: String) -> Double? {
-        let q = query.lowercased()
+        score(preparedQuery: PreparedQuery(query), candidate: candidate)
+    }
+
+    static func score(preparedQuery: PreparedQuery, candidate: String) -> Double? {
+        let q = preparedQuery.lowercased
         let c = candidate.lowercased()
         if q.isEmpty { return 0.0 }
         if c.isEmpty { return nil }

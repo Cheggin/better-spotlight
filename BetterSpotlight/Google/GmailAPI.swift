@@ -15,7 +15,10 @@ struct GmailAPI {
 
         // 1. List message IDs. Empty query → recent inbox messages.
         var listComps = URLComponents(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages")!
-        var items: [URLQueryItem] = [.init(name: "maxResults", value: String(max))]
+        var items: [URLQueryItem] = [
+            .init(name: "maxResults", value: String(max)),
+            .init(name: "fields", value: "messages/id"),
+        ]
         let trimmed = query.trimmingCharacters(in: .whitespaces)
         if trimmed.isEmpty {
             items.append(.init(name: "labelIds", value: "INBOX"))
@@ -72,6 +75,7 @@ struct GmailAPI {
                 .init(name: "metadataHeaders", value: "Subject"),
                 .init(name: "metadataHeaders", value: "From"),
                 .init(name: "metadataHeaders", value: "Date"),
+                .init(name: "fields", value: "id,labelIds,snippet,internalDate,payload/headers"),
             ]
         case .full:
             comps.queryItems = [.init(name: "format", value: "full")]

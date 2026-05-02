@@ -143,6 +143,7 @@ struct CalendarAPI {
             .init(name: "orderBy", value: "startTime"),
             .init(name: "timeMin", value: ISO8601DateFormatter.gcal.string(from: from)),
             .init(name: "timeMax", value: ISO8601DateFormatter.gcal.string(from: to)),
+            .init(name: "fields", value: Self.eventListFields),
         ]
         if let q = query, !q.trimmingCharacters(in: .whitespaces).isEmpty {
             items.append(.init(name: "q", value: q))
@@ -155,6 +156,8 @@ struct CalendarAPI {
         Log.info("calendar got \(parsed.count) events", category: "calendar")
         return parsed
     }
+
+    private static let eventListFields = "items(id,summary,description,location,htmlLink,status,visibility,transparency,eventType,start,end,conferenceData,hangoutLink,attendees,organizer,creator,attachments,reminders)"
 
     private func getJSON(url: URL, token: String) async throws -> [String: Any] {
         var req = URLRequest(url: url)

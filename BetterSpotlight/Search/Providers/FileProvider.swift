@@ -14,8 +14,12 @@ final class FileProvider: NSObject, SearchProvider {
 
     func search(query rawQuery: String) async throws -> [SearchResult] {
         let q = rawQuery.trimmingCharacters(in: .whitespaces)
+        let normalizedQuery = q.lowercased()
+        let preparedQuery = FuzzyMatcher.PreparedQuery(q)
         let urls = preferences.effectiveSearchRoots
-        let rootResults = urls.compactMap { Self.makeRootResult(url: $0, query: q) }
+        let rootResults = urls.compactMap {
+            Self.makeRootResult(url: $0, query: q, normalizedQuery: normalizedQuery)
+        }
         Log.info("file query=\(q) scopes=\(urls.count)", category: "files")
         if q.isEmpty {
             let start = Date()
@@ -50,24 +54,31 @@ final class FileProvider: NSObject, SearchProvider {
                 ) { _ in
                     mq.disableUpdates()
                     let items = (mq.results as? [NSMetadataItem]) ?? []
-                    // Filter junk before mapping — this trims thousands of build/cache
-                    // artifacts down to the handful actually worth showing.
-                    let surviving = items.compactMap { item -> NSMetadataItem? in
+                    // Stop once enough displayable, sorted metadata rows are collected.
+                    // The old path filtered every Spotlight row even though only the
+                    // first 60 could ever be mapped or shown.
+                    var mapped: [SearchResult] = []
+                    mapped.reserveCapacity(60)
+                    var inspected = 0
+                    for item in items {
+                        inspected += 1
                         guard let path = item.value(forAttribute: NSMetadataItemPathKey) as? String
-                        else { return nil }
+                        else { continue }
                         let url = URL(fileURLWithPath: path)
-                        return FileFilter.shouldShow(url) ? item : nil
+                        guard FileFilter.shouldShow(url) else { continue }
+                        guard let result = Self.makeResult(item: item, query: q) else { continue }
+                        mapped.append(result)
+                        if mapped.count >= 60 { break }
                     }
-                    Log.info("file filter kept \(surviving.count) of \(items.count)",
+                    Log.info("file filter mapped \(mapped.count) after inspecting \(inspected) of \(items.count)",
                              category: "files")
-                    let mapped = surviving.prefix(60)
-                        .compactMap { Self.makeResult(item: $0, query: q) }
                     let scored: [SearchResult]
                     if q.isEmpty {
                         scored = mapped
                     } else {
                         scored = mapped.map { result in
-                            let s = FuzzyMatcher.score(query: q, candidate: result.title) ?? 0.5
+                            let s = FuzzyMatcher.score(preparedQuery: preparedQuery,
+                                                       candidate: result.title) ?? 0.5
                             return SearchResult(
                                 id: result.id,
                                 title: result.title,
@@ -173,14 +184,16 @@ final class FileProvider: NSObject, SearchProvider {
         }
     }
 
-    nonisolated private static func makeRootResult(url: URL, query: String) -> SearchResult? {
+    nonisolated private static func makeRootResult(url: URL,
+                                                   query: String,
+                                                   normalizedQuery: String) -> SearchResult? {
         let standardized = url.standardizedFileURL
         let title = standardized.lastPathComponent.isEmpty
             ? standardized.path
             : standardized.lastPathComponent
         if !query.isEmpty {
             let haystack = "\(title) \(standardized.path)".lowercased()
-            guard haystack.contains(query.lowercased()) else { return nil }
+            guard haystack.contains(normalizedQuery) else { return nil }
         }
         let values = try? standardized.resourceValues(forKeys: [
             .contentModificationDateKey,

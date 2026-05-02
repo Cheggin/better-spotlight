@@ -64,3 +64,15 @@ targets:
         CODE_SIGN_ENTITLEMENTS: BetterSpotlight/Resources/BetterSpotlight.entitlements
         INFOPLIST_FILE: BetterSpotlight/Resources/Info.plist
         SWIFT_EMIT_LOC_STRINGS: YES
+  BetterSpotlightTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: BetterSpotlightTests
+    dependencies:
+      - target: BetterSpotlight
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.reagan.betterspotlight.tests
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/BetterSpotlight.app/Contents/MacOS/BetterSpotlight
+        BUNDLE_LOADER: $(TEST_HOST)

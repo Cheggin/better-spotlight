@@ -15,19 +15,13 @@ final class MessagesProvider: SearchProvider {
     private let store = CNContactStore()
     /// Handle (normalized phone or lowercased email) → display name
     nonisolated(unsafe) private static var contactCache: [String: String] = [:]
+    nonisolated(unsafe) private static var contactSearchCache: [String: String] = [:]
     /// Handle → contact thumbnail image data
     nonisolated(unsafe) static var contactImageCache: [String: Data] = [:]
 
     func search(query rawQuery: String) async throws -> [SearchResult] {
         let q = rawQuery.trimmingCharacters(in: .whitespaces)
-        let dbURL = FileManager.default.homeDirectoryForCurrentUser
-            .appending(path: "Library/Messages/chat.db")
-
-        guard FileManager.default.isReadableFile(atPath: dbURL.path) else {
-            Log.warn("messages: chat.db not readable — Full Disk Access required",
-                     category: "messages")
-            throw MessagesError.fullDiskAccessRequired
-        }
+        let dbURL = Self.chatDBURL()
 
         // Resolve contacts upfront (cached after first call).
         await prefetchContacts()
@@ -39,8 +33,8 @@ final class MessagesProvider: SearchProvider {
         // the keyword (e.g. typing "angela" finds her conversation).
         let matchingHandles: [String] = q.isEmpty ? [] : {
             let lower = q.lowercased()
-            return Self.contactCache
-                .filter { $0.value.lowercased().contains(lower) }
+            return Self.contactSearchCache
+                .filter { $0.value.contains(lower) }
                 .map { $0.key }
         }()
 
@@ -73,7 +67,7 @@ final class MessagesProvider: SearchProvider {
         // or retitles the conversation.
         var seen: Set<String> = []
         var out: [RawMessage] = []
-        for m in messages.sorted(by: { $0.date > $1.date }) {
+        for m in messages {
             let key = m.conversationKey
             if seen.contains(key) { continue }
             seen.insert(key)
@@ -110,6 +104,16 @@ final class MessagesProvider: SearchProvider {
     }
 
     func cancel() {}
+
+    nonisolated private static func chatDBURL() -> URL {
+        let override = ProcessInfo.processInfo.environment["BETTER_SPOTLIGHT_CHAT_DB_PATH"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let override, !override.isEmpty {
+            return URL(fileURLWithPath: override)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appending(path: "Library/Messages/chat.db")
+    }
 
     // MARK: - Contacts
 
@@ -177,6 +181,7 @@ final class MessagesProvider: SearchProvider {
             Log.warn("contacts: enumeration failed: \(error)", category: "messages")
         }
         Self.contactCache = nameCache
+        Self.contactSearchCache = nameCache.mapValues { $0.lowercased() }
         Self.contactImageCache = imageCache
         Log.info("contacts: cached \(nameCache.count) names, \(imageCache.count) photos",
                  category: "messages")
@@ -252,11 +257,7 @@ final class MessagesProvider: SearchProvider {
     nonisolated private static func fetchThread(whereClause: String,
                                                 max: Int,
                                                 fallbackDisplayName: String) throws -> [ChatMessage] {
-        let dbURL = FileManager.default.homeDirectoryForCurrentUser
-            .appending(path: "Library/Messages/chat.db")
-        guard FileManager.default.isReadableFile(atPath: dbURL.path) else {
-            throw MessagesError.fullDiskAccessRequired
-        }
+        let dbURL = Self.chatDBURL()
 
         let sql = ChatDB.selectSQL(whereClause: whereClause, limit: max)
         let rows = try ChatDB.run(sql: sql, dbURL: dbURL)
