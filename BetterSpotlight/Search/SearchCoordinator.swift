@@ -15,6 +15,7 @@ final class SearchCoordinator: ObservableObject {
     private var pollTask: Task<Void, Never>?
     private var warmTask: Task<Void, Never>?
     private weak var preferences: Preferences?
+    private var providerCache: [ProviderCacheKey: ProviderCacheEntry] = [:]
 
     /// Filter applied after providers return.
     enum TimeRange: String { case today, week, month, all }
@@ -156,6 +157,8 @@ final class SearchCoordinator: ObservableObject {
         return 45_000_000
     }
 
+    nonisolated private static let providerCacheTTL: TimeInterval = 3
+
     func run(query: String, category: SearchCategory) async {
         let searchStart = Date()
         isLoading = true
@@ -175,8 +178,24 @@ final class SearchCoordinator: ObservableObject {
         var merged = query.isEmpty
             ? results
             : resultsForInactiveCategories(keeping: activeProviders, query: query)
-        await withTaskGroup(of: (SearchCategory, [SearchResult], Int).self) { group in
-            for provider in activeProviders {
+        var providersToSearch: [SearchProvider] = []
+        let now = Date()
+        for provider in activeProviders {
+            let providerCategory = provider.category
+            if let cached = cachedProviderResults(for: providerCategory, query: query, now: now) {
+                merged.removeAll { self.result($0, belongsToProviderCategory: providerCategory) }
+                merged.append(contentsOf: cached)
+                self.publish(merged)
+                self.markLoading(providerCategory: providerCategory, isLoading: false)
+                Log.info("provider \(providerCategory.title) cache hit count=\(cached.count)",
+                         category: "timing")
+            } else {
+                providersToSearch.append(provider)
+            }
+        }
+
+        await withTaskGroup(of: (SearchCategory, [SearchResult], Int, Bool).self) { group in
+            for provider in providersToSearch {
                 let providerCategory = provider.category
                 let label = providerCategory.title
                 group.addTask { [provider] in
@@ -187,18 +206,21 @@ final class SearchCoordinator: ObservableObject {
                         let ms = Int(Date().timeIntervalSince(providerStart) * 1_000)
                         Log.info("provider \(label) complete count=\(results.count) +\(ms)ms",
                                  category: "timing")
-                        return (providerCategory, results, ms)
+                        return (providerCategory, results, ms, true)
                     }
                     catch {
                         Log.warn("provider \(label) failed: \(error)")
                         let ms = Int(Date().timeIntervalSince(providerStart) * 1_000)
                         Log.info("provider \(label) failed +\(ms)ms error=\(error.localizedDescription)",
                                  category: "timing")
-                        return (providerCategory, [], ms)
+                        return (providerCategory, [], ms, false)
                     }
                 }
             }
-            for await (providerCategory, chunk, providerMs) in group {
+            for await (providerCategory, chunk, providerMs, shouldCache) in group {
+                if shouldCache {
+                    self.storeProviderResults(chunk, for: providerCategory, query: query)
+                }
                 merged.removeAll { self.result($0, belongsToProviderCategory: providerCategory) }
                 merged.append(contentsOf: chunk)
                 self.publish(merged)
@@ -344,6 +366,27 @@ final class SearchCoordinator: ObservableObject {
         category == .files ? [.files, .folders] : [category]
     }
 
+    private func cachedProviderResults(for category: SearchCategory,
+                                       query: String,
+                                       now: Date) -> [SearchResult]? {
+        guard !query.isEmpty else { return nil }
+        let key = ProviderCacheKey(category: category, query: query)
+        guard let entry = providerCache[key] else { return nil }
+        guard now.timeIntervalSince(entry.storedAt) <= Self.providerCacheTTL else {
+            providerCache[key] = nil
+            return nil
+        }
+        return entry.results
+    }
+
+    private func storeProviderResults(_ results: [SearchResult],
+                                      for category: SearchCategory,
+                                      query: String) {
+        guard !query.isEmpty else { return }
+        let key = ProviderCacheKey(category: category, query: query)
+        providerCache[key] = ProviderCacheEntry(results: results, storedAt: Date())
+    }
+
     private func prefetchMailBodiesIfNeeded(from results: [SearchResult]) {
         guard let googleSession else { return }
         let messages = Array(results.lazy.compactMap { result -> MailMessage? in
@@ -411,4 +454,14 @@ final class SearchCoordinator: ObservableObject {
         return out
     }
 
+}
+
+private struct ProviderCacheKey: Hashable {
+    let category: SearchCategory
+    let query: String
+}
+
+private struct ProviderCacheEntry {
+    let results: [SearchResult]
+    let storedAt: Date
 }

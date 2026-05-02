@@ -28,22 +28,31 @@ final class SearchPerformanceTests: XCTestCase {
 
         let coordinator = SearchCoordinator()
         coordinator.attach(googleSession: googleSession, preferences: preferences)
-        let liveUnified = await timedAsync(iterations: 3) {
+        let coldUnified = await timedAsync(iterations: 1) {
             await coordinator.run(query: query, category: .all)
             return coordinator.results.count
         }
+        let cachedUnified = await timedAsync(iterations: 2) {
+            await coordinator.run(query: query, category: .all)
+            return coordinator.results.count
+        }
+        let liveUnifiedSeconds = coldUnified.seconds + cachedUnified.seconds
         let previousDebounceSeconds = 0.140 * 3
         let optimizedDebounceSeconds = Double(SearchCoordinator.debounceDelayNanoseconds(for: query)) / 1_000_000_000 * 3
-        let legacyPerceived = liveUnified.seconds + previousDebounceSeconds
-        let optimizedPerceived = liveUnified.seconds + optimizedDebounceSeconds
+        let legacyPerceived = liveUnifiedSeconds + previousDebounceSeconds
+        let optimizedPerceived = liveUnifiedSeconds + optimizedDebounceSeconds
 
         print("""
         SEARCH_PERF live unified coordinator: query='\(query)' \
-        iterations=3 total=\(liveUnified.seconds)s avg=\(liveUnified.seconds / 3)s \
-        finalResults=\(liveUnified.value) counts=\(coordinator.counts) \
+        iterations=3 total=\(liveUnifiedSeconds)s avg=\(liveUnifiedSeconds / 3)s \
+        cold=\(coldUnified.seconds)s cachedTotal=\(cachedUnified.seconds)s \
+        finalResults=\(cachedUnified.value) counts=\(coordinator.counts) \
         perceivedLegacy=\(legacyPerceived)s perceivedOptimized=\(optimizedPerceived)s
         """)
-        XCTAssertGreaterThanOrEqual(liveUnified.value, 0)
+        XCTAssertEqual(cachedUnified.value, coldUnified.value)
+        XCTAssertLessThan(cachedUnified.seconds / 2,
+                          coldUnified.seconds,
+                          "cached unified searches should be faster than the cold run")
         assertFaster(optimized: optimizedPerceived,
                      legacy: legacyPerceived,
                      label: "live unified perceived search")
