@@ -110,6 +110,16 @@ struct RootView: View {
             coordinator.refresh()
         }
         .onChange(of: coordinator.results.map(\.id)) { _, _ in
+            // While actively searching the user just wants the row
+            // highlighted, not auto-promoted into anything else. Per-tab
+            // panes resume their normal selection-tracking when the
+            // query clears.
+            guard !isActivelySearching else {
+                if selectedID == nil {
+                    selectedID = coordinator.results.first?.id
+                }
+                return
+            }
             syncSelectionWithVisibleResults()
         }
         .onChange(of: category) { _, _ in
