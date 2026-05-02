@@ -1,4 +1,5 @@
 import SwiftUI
+import QuickLookThumbnailing
 
 struct ResultsList: View {
     let results: [SearchResult]
@@ -698,13 +699,21 @@ private struct FileTypeBadge: View {
     let info: FileInfo
     let size: CGFloat
 
+    @State private var thumbnail: NSImage?
+
     var body: some View {
-        // Real macOS file icon — application icons for .app bundles, the
-        // proper document icons for everything else (PDF, image preview,
-        // Numbers spreadsheet, etc.). Falls back to the SF Symbol if the
-        // OS can't resolve one.
+        // For preview-able image / vector / document types we ask QuickLook
+        // for a real thumbnail (SVG, PNG, PDF, JPG, MOV, …). Otherwise we
+        // fall back to NSWorkspace's icon — which gives application bundles
+        // their .icns and other files their system document icon. The SF
+        // Symbol is only used when both lookups fail.
         Group {
-            if let icon = FileSystemIconCache.icon(for: info.url) {
+            if let thumbnail {
+                Image(nsImage: thumbnail)
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fit)
+            } else if let icon = FileSystemIconCache.icon(for: info.url) {
                 Image(nsImage: icon)
                     .resizable()
                     .interpolation(.high)
@@ -720,10 +729,35 @@ private struct FileTypeBadge: View {
             }
         }
         .frame(width: size, height: size)
+        .task(id: info.url) { await loadThumbnail() }
     }
 
     private var tint: Color {
         info.isDirectory ? Tokens.Color.folderTint : Tokens.Color.fileTint
+    }
+
+    private func loadThumbnail() async {
+        guard FileTypeBadge.shouldThumbnail(info.url) else {
+            thumbnail = nil
+            return
+        }
+        if let cached = FileThumbnailCache.thumbnail(for: info.url, size: size) {
+            thumbnail = cached
+            return
+        }
+        if let img = await FileThumbnailCache.generate(for: info.url, size: size) {
+            thumbnail = img
+        }
+    }
+
+    private static let thumbnailExtensions: Set<String> = [
+        "svg", "png", "jpg", "jpeg", "gif", "heic", "webp", "tiff", "bmp", "ico",
+        "pdf",
+        "mov", "mp4", "m4v", "webm",
+        "key", "pages", "numbers",
+    ]
+    static func shouldThumbnail(_ url: URL) -> Bool {
+        thumbnailExtensions.contains(url.pathExtension.lowercased())
     }
 }
 
@@ -742,6 +776,35 @@ enum FileSystemIconCache {
         guard icon.size.width > 0, icon.size.height > 0 else { return nil }
         cache.setObject(icon, forKey: key)
         return icon
+    }
+}
+
+/// Caches QuickLook thumbnails per (URL, size). Used by `FileTypeBadge`
+/// for SVGs, images, PDFs, video, and Apple iWork bundles so the row
+/// shows a real preview instead of the generic system document icon.
+enum FileThumbnailCache {
+    private static let cache = NSCache<NSString, NSImage>()
+    static func thumbnail(for url: URL, size: CGFloat) -> NSImage? {
+        cache.object(forKey: cacheKey(for: url, size: size))
+    }
+    static func generate(for url: URL, size: CGFloat) async -> NSImage? {
+        let scale = NSScreen.main?.backingScaleFactor ?? 2
+        let request = QLThumbnailGenerator.Request(
+            fileAt: url,
+            size: CGSize(width: size, height: size),
+            scale: scale,
+            representationTypes: .all
+        )
+        do {
+            let rep = try await QLThumbnailGenerator.shared.generateBestRepresentation(for: request)
+            cache.setObject(rep.nsImage, forKey: cacheKey(for: url, size: size))
+            return rep.nsImage
+        } catch {
+            return nil
+        }
+    }
+    private static func cacheKey(for url: URL, size: CGFloat) -> NSString {
+        "\(url.path)|\(Int(size))" as NSString
     }
 }
 

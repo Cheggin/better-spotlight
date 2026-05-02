@@ -142,9 +142,6 @@ private struct SearchResultRow: View {
 
             Spacer(minLength: Tokens.Space.sm)
 
-            CategoryBadge(category: result.category)
-                .padding(.trailing, 4)
-
             Text(dateLabel ?? "")
                 .font(.system(size: 11, weight: .medium))
                 .monospacedDigit()
@@ -189,50 +186,3 @@ private struct SearchResultRow: View {
     }
 }
 
-/// Shows a category pill: real Gmail / Google Calendar logos for those two
-/// sources, otherwise an SF Symbol tinted to the category color.
-private struct CategoryBadge: View {
-    let category: SearchCategory
-
-    var body: some View {
-        HStack(spacing: 4) {
-            iconView
-            Text(category.title)
-                .font(.system(size: 10, weight: .semibold))
-                .tracking(0.4)
-        }
-        .foregroundStyle(category.tint)
-        .padding(.horizontal, 6)
-        .padding(.vertical, 3)
-        .background(
-            Capsule().fill(category.tint.opacity(0.12))
-        )
-    }
-
-    @ViewBuilder
-    private var iconView: some View {
-        switch category {
-        case .mail:
-            brandedIcon("gmail")
-        case .calendar:
-            brandedIcon("google-calendar")
-        default:
-            Image(systemName: category.iconName)
-                .font(.system(size: 9, weight: .semibold))
-        }
-    }
-
-    @ViewBuilder
-    private func brandedIcon(_ name: String) -> some View {
-        if let img = BundledIcon.image(named: name) {
-            Image(nsImage: img)
-                .resizable()
-                .interpolation(.high)
-                .aspectRatio(contentMode: .fit)
-                .frame(width: 12, height: 12)
-        } else {
-            Image(systemName: category.iconName)
-                .font(.system(size: 9, weight: .semibold))
-        }
-    }
-}
